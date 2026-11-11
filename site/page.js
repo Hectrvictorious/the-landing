@@ -14,7 +14,7 @@
     days: [], dayIdx: 0, loops: {}, gotLoops: false, areas: [], areaMap: {}, stars: [], feeds: [], inbox: [], status: null,
     asks: {}, gotAsks: false, checkins: {}, readings: [], learned: {}, week: null, weekId: '', config: {}, next: null,
     view: 'today', openLoops: {}, openAreas: {}, help: {}, dropArm: null,
-    multi: {}, askAll: false, knowAll: false, readAll: false, scriptOpen: false, appInfo: null, unlinkArm: false, linkMiss: false, showLink: false,
+    multi: {}, askAll: false, knowAll: false, readAll: false, scriptOpen: false, appInfo: null, unlinkArm: false, linkMiss: false, showLink: false, prefs: {}, handNote: {}, handOpen: {}, handFix: {},
     tts: null, speaking: false, dict: null, listening: false, sample: null
   };
 
@@ -33,6 +33,11 @@
   const fDow = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short' });
   const fHour = new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: 'numeric', hourCycle: 'h23' });
   const hourNow = () => Number(fHour.format(new Date())) || 0;
+  const fHM = new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit', hourCycle: 'h23' });
+  /* The owner's clock as a number: 13.25 is a quarter past one in the afternoon. */
+  const clockNow = () => { const p = fHM.formatToParts(new Date()); const g = t => Number((p.find(x => x.type === t) || {}).value) || 0; return (g('hour') % 24) + g('minute') / 60; };
+  /* "10:00 AM" -> 10, "2:30 PM" -> 14.5. Words like "Evening" or "By tonight" -> null. */
+  function clockOf(text) { const m = /(\d{1,2})(?::(\d{2}))?\s*([AP])\.?M/i.exec(String(text || '')); if (!m) return null; let h = Number(m[1]) % 12; if (/p/i.test(m[3])) h += 12; return h + (Number(m[2]) || 0) / 60; }
   const validYMD = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
   const mondayOf = ymd => { const d = asDate(ymd); return addDays(ymd, -((d.getUTCDay() + 6) % 7)); };
   function inDays(ymd) {
@@ -171,6 +176,103 @@
     return '';
   }
 
+  /* ---------- handing a loop to Claude ----------
+     One tap asks the next run to do the part Claude can do alone. The run writes its work back onto the loop:
+     handoff { status asked|ready|cant|seen|cancelled, askedAt, note, changes, doneAt, result { summary, body, link, needs, finishes } }.
+     The page only ever writes status, the times, note and changes. */
+  const hand = L => ((L && L.handoff && typeof L.handoff === 'object') ? L.handoff : null);
+  const handBack = L => { const h = hand(L); return !!(h && h.result && typeof h.result === 'object' && (h.status === 'ready' || h.status === 'cant')); };
+  function richText(t) {
+    return String(t == null ? '' : t).split(/(https:\/\/[^\s<>"')\]]+)/g).map((part, i) => {
+      if (i % 2 === 0) return esc(part);
+      const tail = (/[.,;:!?]+$/.exec(part) || [''])[0]; const url = tail ? part.slice(0, -tail.length) : part;
+      return '<a href="' + esc(url) + '" target="_blank" rel="noopener">' + esc(url) + '</a>' + esc(tail);
+    }).join('');
+  }
+  function handBlock(L, live) {
+    const h = hand(L); const id = esc(L.id); const st = h ? String(h.status || '') : '';
+    const field = (ph, act, label) => '<div class="linkbox"><input class="hand-in" type="text" maxlength="600" placeholder="' + ph + '" aria-label="' + ph + '"><button class="btn small primary" type="button" data-act="' + act + '" data-id="' + id + '">' + label + '</button></div>';
+    if (st === 'asked') {
+      return '<div class="hand"><p class="hand-h">Handed to Claude</p><p class="meta">' + (h.changes ? 'Sent back with your changes. ' : '') + 'It comes back with the next edition: about 1:15 in the afternoon, or 9:20 in the morning.</p>' +
+        (h.changes ? '<p class="meta">What you asked to change: ' + esc(h.changes) + '</p>' : '') + (h.note ? '<p class="meta">Your note: ' + esc(h.note) + '</p>' : '') +
+        (live ? (S.handNote[L.id] ? field('Anything Claude should know?', 'handnote', 'Save') :
+          '<div class="row"><button class="link" type="button" data-act="handnoteopen" data-id="' + id + '">' + (h.note ? 'Change the note' : 'Add a note for Claude') + '</button><button class="link" type="button" data-act="handback" data-id="' + id + '">Take it back</button></div>') : '') + '</div>';
+    }
+    if ((st === 'ready' || st === 'cant' || st === 'seen') && h.result && typeof h.result === 'object') {
+      const r = h.result; const open = !!S.handOpen[L.id]; const link = safeUrl(r.link);
+      return '<div class="hand back"><p class="hand-h">' + (st === 'cant' ? 'Claude needs something from you' : 'Back from Claude') + (h.doneAt ? ' · ' + esc(ago(h.doneAt)) : '') + '</p>' +
+        (r.summary ? '<p>' + esc(r.summary) + '</p>' : '') + (r.needs ? '<p class="soft">' + esc(r.needs) + '</p>' : '') +
+        (r.body ? '<div class="row"><button class="link" type="button" data-act="handshow" data-id="' + id + '" aria-expanded="' + open + '">' + (open ? 'Hide it' : 'Show it') + '</button>' + (open ? '<button class="link" type="button" data-act="handcopy" data-id="' + id + '">Copy</button>' : '') + '</div>' + (open ? '<div class="body">' + richText(r.body) + '</div>' : '') : '') +
+        (link ? '<div class="row"><a class="link" href="' + esc(link) + '" target="_blank" rel="noopener">Open the full version ↗</a></div>' : '') +
+        (live ? (S.handFix[L.id] ? field(st === 'cant' ? 'Your answer' : 'What should change?', 'handfix', 'Send it back') :
+          '<div class="row">' + (st !== 'seen' && L.status !== 'done' ? '<button class="btn small primary" type="button" data-act="handseen" data-id="' + id + '">' + (r.finishes ? 'Looks good. That\'s done.' : 'Looks good') + '</button>' : '') +
+          '<button class="btn small" type="button" data-act="handfixopen" data-id="' + id + '">' + (st === 'cant' ? 'Answer Claude' : 'Change something') + '</button></div>') : '') + '</div>';
+    }
+    if (!live || (L.status !== 'open' && L.status !== 'unsure')) return '';
+    return '<div class="hand offer">' + (L.offer ? '<p class="meta">Claude can take this: ' + esc(L.offer) + '</p>' : '') +
+      '<div class="row"><button class="btn small" type="button" data-act="handoff" data-id="' + id + '">Hand it to Claude</button></div></div>';
+  }
+  /* What has come back and not been looked at yet, gathered at the top of Today. */
+  function backBlock(live, skipId) {
+    const list = loopList().filter(L => handBack(L) && L.id !== skipId).sort((a, b) => String(hand(b).doneAt || '').localeCompare(String(hand(a).doneAt || '')));
+    if (!list.length) return '';
+    return '<section class="sec" aria-labelledby="bkH"><h2 class="h" id="bkH">Back from Claude · ' + list.length + '</h2><div>' + list.map(L =>
+      '<div class="backrow"><h3>' + esc(L.title) + '</h3>' + handBlock(L, live) + '</div>').join('') + '</div></section>';
+  }
+
+  /* ---------- the hour ----------
+     The top of Today changes through the day: the plan in the morning, the one thing in the hour he says hard things
+     go best, what's left in the afternoon, the evening's items and Close the day at night. It reads the clock; no run needed. */
+  function hardWindow() {
+    const pref = S.prefs && S.prefs.hardThingTime; const A = askList().find(a => a.sets === 'hardThingTime' && a.status === 'answered');
+    const v = String((pref && pref.value) || (A && A.answer) || '');
+    if (/first thing/i.test(v)) return { from: 7, to: 10, said: 'first thing' };
+    if (/late morning/i.test(v)) return { from: 10, to: 12, said: 'late in the morning' };
+    if (/evening/i.test(v)) return { from: 18, to: 21, said: 'in the evening' };
+    if (/after lunch/i.test(v)) return { from: 12.5, to: 15.5, said: 'after lunch' };
+    return { from: 12.5, to: 15.5, said: '' };
+  }
+  function nowCard(d) {
+    const t = clockNow(); const ticks = d.ticks || {}; const c = checkin();
+    const items = (Array.isArray(d.today) ? d.today : []).filter(it => it && it.title);
+    const isDone = it => { const L = it.loopId && S.loops[it.loopId]; return L ? L.status === 'done' : !!ticks[it.id]; };
+    const left = items.filter(it => it.kind !== 'event' && it.kind !== 'holiday' && !isDone(it));
+    const next = items.map(it => ({ it: it, c: clockOf(it.time) })).filter(x => x.c != null && x.c > t - 0.25 && !isDone(x.it)).sort((a, b) => a.c - b.c)[0];
+    const ch = oneChoice(d, true); const o = ch.o && ch.o.title ? ch.o : null;
+    const L = (o && o.loopId && S.loops[o.loopId]) || null;
+    const oneOpen = !!o && (!L || (L.status === 'open' && !isSnoozed(L)));
+    const oneLanded = !!(L && L.status === 'done');
+    const w = hardWindow();
+    const nextLine = next ? '<p><b>Next:</b> ' + esc(next.it.time) + ' · ' + esc(next.it.title) + '</p>' : '';
+    const pm = d.afternoon && d.afternoon.line ? '<p class="meta">After lunch' + (d.afternoon.writtenLabel ? ', ' + esc(d.afternoon.writtenLabel) : '') + ': ' + esc(d.afternoon.line) + '</p>' : '';
+    const close = !c.rating ? '<div class="row"><button class="btn small" type="button" data-act="nav" data-id="checkin">Close the day</button></div>' : '';
+    let eyebrow, body;
+    if (oneOpen && t >= w.from && t < w.to) {
+      eyebrow = 'Your hour for the hard thing';
+      body = (w.said ? '<p class="meta">You said hard things go best ' + w.said + '.</p>' : '') + '<h3>' + esc(o.title) + '</h3>' +
+        (o.firstStep ? '<p><b>First two minutes:</b> ' + esc(o.firstStep) + '</p>' : '') +
+        (o.waiting ? '<p>' + esc(o.waiting) + '</p>' : '') + (o.after ? '<p class="meta">Then: ' + esc(o.after) + '</p>' : '') +
+        (c.energy === 'low' ? '<p class="meta">Low-energy day: the first two minutes are plenty.</p>' : '') + pm;
+    } else if (t < 12) {
+      eyebrow = 'This morning';
+      body = (nextLine || '<p>Nothing on the clock this morning.</p>') + (oneOpen && t < w.from ? '<p class="meta">The one thing waits for ' + (w.said || 'early afternoon') + ': ' + esc(o.title) + '.</p>' : '');
+    } else if (t < 17) {
+      eyebrow = 'This afternoon';
+      body = (oneLanded ? '<p>The one thing has landed.</p>' : oneOpen ? '<p>The one thing is still open, and two minutes is enough to start it.</p>' : '') + nextLine +
+        '<p class="meta">' + (left.length ? left.length + ' thing' + (left.length === 1 ? '' : 's') + ' left on today\'s list.' : 'Today\'s list is clear.') + '</p>' + pm;
+    } else if (t < 21.5) {
+      const eve = left.filter(it => { const k = clockOf(it.time); return k != null ? k >= 17 : /even|tonight|night/i.test(String(it.time || '')); }).slice(0, 3);
+      eyebrow = 'This evening';
+      body = (eve.length ? '<p>' + eve.map(it => esc(it.title)).join(' · ') + '</p>' : '<p>Nothing left that needs you tonight.</p>') +
+        (oneLanded ? '<p class="meta">The one thing landed today.</p>' : '') + pm + close;
+    } else {
+      const landed = items.filter(isDone).length + loopList().filter(x => x.status === 'done' && Date.parse(x.doneAt || '') && fYMD.format(new Date(x.doneAt)) === todayYMD() && !items.some(it => it.loopId === x.id)).length;
+      eyebrow = 'The day is done';
+      body = '<p>' + (landed ? landed + ' thing' + (landed === 1 ? '' : 's') + ' landed today.' : 'Nothing more is owed tonight. What didn\'t happen keeps.') + '</p>' + close + '<p class="meta">Tomorrow\'s page comes about 9:20.</p>';
+    }
+    return '<section class="now" aria-label="Right now"><div class="eyebrow">' + eyebrow + '</div>' + body + '</section>';
+  }
+
   function loopActions(L, opts) {
     opts = opts || {};
     const id = esc(L.id);
@@ -274,10 +376,11 @@
     return '<section class="one" aria-label="The one thing"><div class="eyebrow">' + (ch.at ? 'Another option · ' + (ch.at + 1) + ' of ' + (ch.alts.length + 1) : 'The one thing') + '</div><h2>' + esc(o.title) + '</h2>' +
       (o.why ? '<p class="why">' + esc(o.why) + '</p>' : '') +
       (o.firstStep ? '<div class="first"><span class="lab">First two minutes</span><p>' + esc(o.firstStep) + '</p></div>' : '') +
+      (o.waiting ? '<p class="meta">' + esc(o.waiting) + '</p>' : '') + (o.after ? '<p class="meta">Then: ' + esc(o.after) + '</p>' : '') +
       (low ? '<p class="soft">Low-energy day. The first two minutes are plenty; the rest can wait for a better hour.</p>' : '') +
       (L ? stepsBlock(L, actionable) : '') +
       (o.script ? '<div class="script"><button class="link" type="button" data-act="script" aria-expanded="' + (S.scriptOpen ? 'true' : 'false') + '">' + (S.scriptOpen ? 'Hide the words' : 'What to say') + '</button>' + (S.scriptOpen ? '<p>' + esc(o.script) + '</p>' : '') + '</div>' : '') +
-      (L && actionable ? loopActions(L) + helpBlock(L.id) : '') + swap +
+      (L && actionable ? loopActions(L) + helpBlock(L.id) + handBlock(L, !!S.db) : '') + swap +
       (metaBits.length ? '<p class="meta">' + metaBits.join(' · ') + '</p>' : '') + '</section>';
   }
 
@@ -295,6 +398,9 @@
       '<button type="button" data-act="older"' + (S.dayIdx >= S.days.length - 1 ? ' disabled' : '') + ' aria-label="Earlier edition">‹ Earlier</button>' +
       '<button type="button" data-act="newer"' + (S.dayIdx <= 0 ? ' disabled' : '') + ' aria-label="Later edition">Later ›</button></div>' : '') + '</div>';
     if (!isToday && S.dayIdx === 0) h += '<p class="notice">This is ' + esc(fWeekday.format(asDate(d.date))) + '\'s edition. Today\'s is written about 9:20 in the morning.</p>';
+    const live0 = S.dayIdx === 0 && !!S.db;
+    if (live0 && isToday) h += nowCard(d);
+    if (live0) { const one = oneChoice(d, true).o; h += backBlock(true, one && one.loopId); }
     h += '<p class="lede">' + esc(d.nameTheDay || '') + '</p>';
     if (d.weather || S.tts) h += '<div class="row">' + (d.weather ? '<p class="weather">' + esc(d.weather) + '</p>' : '') + (S.tts ? '<button class="link" type="button" data-act="speak">' + (S.speaking ? 'Stop reading' : 'Read it to me') + '</button>' : '') + '</div>';
     const live = S.dayIdx === 0 && !!S.db;
@@ -325,9 +431,6 @@
     if (oa.length) {
       h += '<section class="sec" aria-labelledby="qH"><h2 class="h" id="qH">A question for you</h2>' + askCard(oa[0]) +
         (oa.length > 1 ? '<div class="row"><button class="link" type="button" data-act="nav" data-id="checkin">' + (oa.length - 1) + ' more in Check in</button></div>' : '') + '</section>';
-    }
-    if (live && isToday && hourNow() >= 16 && !checkin().rating) {
-      h += '<p class="soft">Evening. <button class="link inline" type="button" data-act="nav" data-id="checkin">Close the day in two taps</button>, and pick tomorrow\'s one thing if you like.</p>';
     }
     paint(top, h);
 
@@ -378,12 +481,15 @@
     if (L.source) bits.push(esc(L.source));
     const st = loopSteps(L);
     if (st.length && L.status !== 'done') bits.push(st.filter(x => L.stepTicks && L.stepTicks[x.id]).length + ' of ' + st.length + ' steps');
+    const hs = hand(L) ? String(hand(L).status || '') : '';
+    if (hs === 'asked') bits.push('with Claude'); else if (handBack(L)) bits.push('<b>back from Claude</b>');
     return '<div class="loop' + (L.status === 'done' ? ' done' : '') + '"><div class="loop-top">' + dot(L.area) +
       '<button class="loop-title" type="button" data-act="toggle" data-id="' + esc(L.id) + '" aria-expanded="' + open + '">' + esc(L.title) + '</button></div>' +
       '<div class="loop-body"><p class="loop-meta">' + bits.join(' · ') + '</p>' +
       (open || L.status === 'unsure' ? (L.why ? '<p class="why">' + esc(L.why) + '</p>' : '') + (L.firstStep && L.status !== 'done' ? '<p class="fs"><b>First step</b>' + esc(L.firstStep) + '</p>' : '') : '') +
       (open && L.status !== 'done' ? stepsBlock(L, true) : '') +
       (open || L.status === 'unsure' || L.status === 'done' ? loopActions(L) + helpBlock(L.id) : '') +
+      (open || hs === 'asked' || handBack(L) ? handBlock(L, !!S.db) : '') +
       (open && L.status === 'open' ? blockerRow(L) : '') + '</div></div>';
   }
 
@@ -493,8 +599,9 @@
     }).join('') + '</div>' +
       appBlock() +
       '<section class="sec how"><h2 class="h">How this page works</h2><div>' +
-      '<p>Each morning about 9:20 a new edition is written from your notes, your calendar, your recordings, your money and piano pages, and your agents\' headlines. It picks one thing you\'ve been putting off and makes the first step small.</p>' +
-      '<p>Every tap here is saved right away and read the next morning: I did it, Not today, Let it go, the steps and lists you tick, and anything you type or say under Tell The Landing. Nothing here sends email or contacts anyone.</p>' +
+      '<p>Each morning about 9:20 a new edition is written from your notes, your calendar, your recordings, your money and piano pages, and your agents\' headlines. It picks one thing you\'ve been putting off and makes the first step small. A second, shorter pass runs after lunch, about 1:15. In between, the top of Today follows the clock.</p>' +
+      '<p>Every tap here is saved right away and read at the next pass: I did it, Not today, Let it go, the steps and lists you tick, and anything you type or say under Tell The Landing. Nothing here sends email or contacts anyone.</p>' +
+      '<p>Hand it to Claude does what it says. The next pass does the part Claude can do alone (research, a draft, a comparison, a call sheet) and brings it back here for you to read. Drafts only: nothing gets sent, bought or signed.</p>' +
       '<p>Check in is where the page learns you: a few one-tap questions at a time, each saying why it asks. Your answers change what the next editions pick, when they suggest it and how they word it. What the page has taken from you is listed there too, and you can correct any line.</p>' +
       '<p>Only you can open this page.</p></div></section>');
   }
@@ -660,6 +767,15 @@
     if (undo && msg) toast(msg, undoable ? undo : null);
     return undo;
   }
+  /* Change the hand-off on a loop. Only the fields given are sent; the run's own work (result) is never written from here. */
+  function patchHand(id, fields, extra) {
+    const L = S.loops[id]; if (!L || !S.db) return false;
+    const stamp = { updatedAt: new Date().toISOString(), by: 'page' };
+    S.loops[id] = Object.assign({}, L, extra || {}, { handoff: Object.assign({}, hand(L) || {}, fields) }, stamp); schedule();
+    wq('loops/' + id, () => S.db.doc('loops/' + id).update(Object.assign({}, extra || {}, { handoff: fields }, stamp))).catch(e => { S.loops[id] = L; schedule(); saveFail(e); });
+    return true;
+  }
+  const fieldText = btn => { const box = btn && btn.closest('.linkbox'); const inp = box && box.querySelector('input'); return inp ? String(inp.value || '').trim().slice(0, 600) : ''; };
   function addInbox(doc) {
     if (!S.db) return Promise.reject({ code: 'unavailable' });
     return S.db.collection('inbox').add(Object.assign({ at: new Date().toISOString(), day: todayYMD(), handled: false }, doc));
@@ -726,6 +842,26 @@
       const next = (ch.at + 1) % (ch.alts.length + 1);
       S.scriptOpen = false;
       setCheckin({ swappedTo: next ? altKey(ch.alts[next - 1]) : '', swappedAt: new Date().toISOString() });
+    },
+    handoff(id) { if (patchHand(id, { status: 'asked', askedAt: new Date().toISOString(), changes: '' })) toast('Handed to Claude. It comes back with the next edition.'); },
+    handback(id) { if (patchHand(id, { status: 'cancelled', cancelledAt: new Date().toISOString() })) { delete S.handNote[id]; toast('Taken back. It\'s yours again.'); } },
+    handnoteopen(id) { S.handNote[id] = true; schedule(); },
+    handnote(id, btn) { if (patchHand(id, { note: fieldText(btn) })) { delete S.handNote[id]; toast('Note saved.'); } },
+    handshow(id) { S.handOpen[id] = !S.handOpen[id]; schedule(); },
+    handcopy(id) {
+      const h = hand(S.loops[id]); const t = h && h.result ? String(h.result.body || h.result.summary || '') : ''; if (!t) return;
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(() => toast('Copied.')).catch(() => toast('Couldn\'t copy from here. Press and hold the text instead.'));
+      else toast('Couldn\'t copy from here. Press and hold the text instead.');
+    },
+    handseen(id) {
+      const L = S.loops[id]; const h = hand(L); if (!h) return; const now = new Date().toISOString();
+      const fin = !!(h.result && h.result.finishes) && L.status !== 'done';
+      if (patchHand(id, { status: 'seen', seenAt: now }, fin ? { status: 'done', doneAt: now, doneVia: 'handoff' } : null)) toast(fin ? landedMsg() : 'Good. It stays with the loop if you want it again.');
+    },
+    handfixopen(id) { S.handFix[id] = true; schedule(); },
+    handfix(id, btn) {
+      const v = fieldText(btn); if (!v) { toast('Say what should change first.'); return; }
+      if (patchHand(id, { status: 'asked', askedAt: new Date().toISOString(), changes: v })) { delete S.handFix[id]; toast('Sent back to Claude.'); }
     },
     done(id) { S.dropArm = null; setLoop(id, { status: 'done', doneAt: new Date().toISOString(), doneVia: 'page' }, landedMsg(), true); },
     still(id) { setLoop(id, { status: 'open' }, 'Kept on the list.', true); },
@@ -880,7 +1016,7 @@
   /* Enter in a one-line field presses the button beside it. */
   document.addEventListener('keydown', ev => {
     if (ev.key !== 'Enter' || !ev.target || ev.target.tagName !== 'INPUT') return;
-    const lb = ev.target.closest('.linkbox'); if (lb) { const go = lb.querySelector('button[data-act="applink"]'); if (go) { ev.preventDefault(); go.click(); } return; }
+    const lb = ev.target.closest('.linkbox'); if (lb) { const go = lb.querySelector('button[data-act]'); if (go) { ev.preventDefault(); go.click(); } return; }
     const scope = ev.target.closest('.ask, .know, .add') || ev.target.closest('section'); if (!scope) return;
     const btn = scope.querySelector('button[data-act="anstext"], button[data-act="ansmulti"], button[data-act="fixsave"], button[data-act="fbsave"], button[data-act="addloop"], button[data-act="addreading"]');
     if (btn) { ev.preventDefault(); btn.click(); }
@@ -968,8 +1104,11 @@
     db.doc('weeks/' + S.weekId).onSnapshot(s => { S.week = s.exists ? s.data() : null; schedule(); }, () => {});
     db.doc('meta/config').onSnapshot(s => { S.config = (s.exists && s.data()) || {}; schedule(); }, () => {});
     db.doc('meta/next').onSnapshot(s => { S.next = s.exists ? s.data() : null; schedule(); }, () => {});
+    db.doc('meta/prefs').onSnapshot(s => { S.prefs = (s.exists && s.data()) || {}; schedule(); }, () => {});
     if (!window.LandingApp) db.doc('meta/app').onSnapshot(s => { S.appInfo = s.exists ? s.data() : null; schedule(); }, () => {});
   }
   window.addEventListener('landing-sync', schedule);
+  setInterval(() => { if (!document.hidden) schedule(); }, 60000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) schedule(); });
   boot();
 })();

@@ -170,7 +170,11 @@ def load_export(root):
 
 # ---------- what a tap may change ----------
 STATUS = {'open', 'unsure', 'waiting', 'done', 'dropped'}
-LOOP_UPD = {'status', 'snoozeUntil', 'passes', 'passedOn', 'doneAt', 'doneVia', 'droppedAt', 'blocker', 'blockerOn', 'stepTicks', 'steps', 'stepsBy', 'updatedAt', 'by'}
+LOOP_UPD = {'status', 'snoozeUntil', 'passes', 'passedOn', 'doneAt', 'doneVia', 'droppedAt', 'blocker', 'blockerOn', 'stepTicks', 'steps', 'stepsBy', 'handoff', 'updatedAt', 'by'}
+# Handing a loop to Claude: a tap may ask, add a note, ask for changes, take it back, or say "looks good".
+# It may never write the result; only the run does that.
+HAND_KEYS = {'status', 'askedAt', 'note', 'changes', 'seenAt', 'cancelledAt'}
+HAND_STATUS = {'asked', 'seen', 'cancelled'}
 LOOP_NEW = {'title', 'area', 'status', 'why', 'firstStep', 'minutes', 'due', 'kind', 'weight', 'source', 'since', 'offered', 'lastOffered', 'snoozeUntil', 'doneAt', 'updatedAt', 'by'}
 ASK_UPD = {'status', 'answer', 'answeredAt', 'skippedOn', 'showOn', 'updatedAt', 'by'}
 LEARN_UPD = {'ok', 'okOn', 'correction', 'updatedAt', 'by'}
@@ -196,7 +200,10 @@ def check_op(o, docs):
             if 'status' in d and d['status'] not in STATUS: return 'loop status'
             if 'stepTicks' in d and not ticks_ok(d['stepTicks']): return 'step ticks'
             if 'steps' in d and not (isinstance(d['steps'], list) and len(d['steps']) <= 8 and all(isinstance(s, dict) and set(s) <= {'id', 'text', 'minutes'} and scalar(s.get('id'), 40) and scalar(s.get('text'), 200) for s in d['steps'])): return 'steps'
-            return None if all(scalar(v) for k, v in d.items() if k not in ('stepTicks', 'steps')) else 'loop values'
+            if 'handoff' in d:
+                h = d['handoff']
+                if not (isinstance(h, dict) and set(h) <= HAND_KEYS and h.get('status', 'asked') in HAND_STATUS and all(scalar(v, 700) for v in h.values())): return 'hand-off'
+            return None if all(scalar(v) for k, v in d.items() if k not in ('stepTicks', 'steps', 'handoff')) else 'loop values'
         if w == 'set':
             if exists or not set(d) <= LOOP_NEW or d.get('by') != 'page' or d.get('status') != 'open': return 'new loop'
             return None if isinstance(d.get('title'), str) and 0 < len(d['title']) <= 200 and all(scalar(v) for v in d.values()) else 'new loop values'

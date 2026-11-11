@@ -7,7 +7,7 @@
 <meta name="description" content="One page for the day: the one thing, today, every part of life, and what's coming.">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://ntfy.sh; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="robots" content="noindex, nofollow">
-<meta name="landing-build" content="20261111T020901">
+<meta name="landing-build" content="20261111T024904">
 <meta name="theme-color" content="#1f433a">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -280,6 +280,18 @@ ul { list-style: none; margin: 0; padding: 0; }
 .know .ka { font-family: var(--font-display); font-weight: 600; font-size: 19px; line-height: 1.25; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 14px; }
 .soft { background: var(--surface-2); border-radius: 10px; padding: 8px 12px; font-size: 15px; color: var(--ink-2); }
+/* the hour: what matters right now */
+.now { background: var(--surface); border: 1px solid var(--line); border-left: 5px solid var(--good); border-radius: 4px 12px 12px 4px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.now .eyebrow { font-family: var(--font-display); font-weight: 700; font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--good); }
+.now h3 { font-family: var(--font-display); font-weight: 700; font-size: 21px; line-height: 1.2; }
+/* handing a loop to Claude, and what comes back */
+.hand { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.hand.offer { background: transparent; padding: 0; }
+.hand-h { font-family: var(--font-display); font-weight: 700; font-size: 13px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-2); }
+.hand .body { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 15.5px; }
+.backrow { border-top: 1px solid var(--line); padding: 10px 0; display: flex; flex-direction: column; gap: 6px; }
+.backrow:first-child { border-top: 0; padding-top: 0; }
+.backrow h3 { font-family: var(--font-display); font-weight: 700; font-size: 18px; line-height: 1.25; }
 .howto { margin: 0; padding-left: 22px; list-style: decimal; display: flex; flex-direction: column; gap: 4px; }
 a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 
