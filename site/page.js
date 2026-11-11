@@ -311,7 +311,7 @@
       const n = habitList().filter(x => x.status === 'idea').length; const kept = habitList().some(x => x.status === 'kept');
       return '<section class="habit" aria-label="One habit at a time"><div class="eyebrow">One habit at a time</div>' +
         '<p>' + (kept ? 'Nothing in the making right now. Ready for the next one?' : 'Build one small habit, tied to something you already do. The page asks once a day whether it happened.') + (n ? ' ' + n + (n === 1 ? ' is' : ' are') + ' ready to pick from.' : '') + '</p>' +
-        '<div class="row"><button class="btn small primary" type="button" data-act="hgo">Pick one</button><button class="btn small quiet" type="button" data-act="hquiet">Not now</button></div></section>';
+        '<div class="row"><button class="btn small primary" type="button" data-act="hgo">' + (n ? 'Pick one' : 'Write one') + '</button><button class="btn small quiet" type="button" data-act="hquiet">Not now</button></div></section>';
     }
     const st = hStats(H);
     return '<section class="habit" aria-label="Your one habit"><div class="eyebrow">One habit · day ' + st.n + '</div><p class="plan">' + planHtml(H) + '</p>' +
@@ -363,7 +363,8 @@
         '<div class="row"><button class="link" type="button" data-act="hedit" data-id="' + id + '">Change the words</button><button class="link" type="button" data-act="hpause" data-id="' + id + '">Pause it</button>' +
         '<button class="link" type="button" data-act="hdrop" data-id="' + id + '">' + (S.hArm === 'drop:' + H.id ? 'Tap again to let it go' : 'Let it go') + '</button></div></div>';
     } else {
-      h += '<p>' + (kept.length ? 'Ready for the next one? ' : '') + 'Pick one habit, tie it to something you already do, and make it small enough to do on a bad day. The page asks once a day whether it happened.</p>';
+      h += '<p>' + (kept.length ? 'Ready for the next one? ' : '') + 'Pick one habit, tie it to something you already do, and make it small enough to do on a bad day. The page asks once a day whether it happened.</p>' +
+        (ideas.length || paused.length ? '' : '<p class="meta">No suggestions are here yet. They arrive with the next edition. You can write your own now.</p>');
     }
     if (!S.hEdit) {
       const pick = ideas.concat(paused);
@@ -1067,7 +1068,11 @@
       const v = fieldText(btn); if (!v) { toast('Say what should change first.'); return; }
       if (patchHand(id, { status: 'asked', askedAt: new Date().toISOString(), changes: v })) { delete S.handFix[id]; toast('Sent back to Claude.'); }
     },
-    hgo() { go('checkin'); requestAnimationFrame(() => requestAnimationFrame(() => { const el = $('habitSec'); if (el) el.scrollIntoView({ block: 'start' }); })); },
+    hgo() {
+      /* With nothing to pick from, go straight to writing one. */
+      if (S.db && !S.hEdit && !habitList().some(x => x.status === 'idea' || x.status === 'paused' || x.status === 'building')) { openHabitEditor('', 'hTitle'); return; }
+      go('checkin'); requestAnimationFrame(() => requestAnimationFrame(() => { const el = $('habitSec'); if (el) el.scrollIntoView({ block: 'start' }); }));
+    },
     hquiet() { try { localStorage.setItem('tl.hquiet', todayYMD()); } catch (e) { /* it shows again next time */ } render(); },
     hwhy() { S.hWhy = !S.hWhy; schedule(); },
     hday(id, b) {
