@@ -43,6 +43,15 @@ service worker picks up the new build and the page reloads once. Nobody reinstal
 Open the private page in Claude on that device, go to Horizon, and tap **Open the phone app**. Then use the
 browser's menu to add it to the home screen. To remove a device, open Horizon in the app and tap **Unlink this device**.
 
+That button opens in the phone's default browser. To have the app in a different one:
+
+- from a browser that is already linked, Horizon has **Open in Chrome** (Android) and **Copy the link**;
+- the private page has **Copy the link** too;
+- an app that isn't linked yet shows a box to paste the link into.
+
+The key is also picked up if it arrives late: the address changes while the page is open, or another tab on the same
+phone gets linked.
+
 ## Starting over with a new key
 
 Generate 32 random bytes (base64url), store them in the private page's settings, and change `SYNC_TOPIC` and

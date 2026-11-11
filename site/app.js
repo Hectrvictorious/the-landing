@@ -301,18 +301,32 @@
     };
   })() : null;
 
+  /* ---------- linking this device ----------
+     The key normally arrives in the address, after "#join=". It can also arrive late: the address changes while the
+     page is already open, another tab or window on this phone gets linked, or the owner pastes the link into the page. */
+  function keyIn(text) {
+    let s = String(text || ''); try { s = decodeURIComponent(s); } catch (e) { /* use it as it came */ }
+    const m = /join=([A-Za-z0-9_-]{43})(?![A-Za-z0-9_-])/.exec(s) || /^\s*([A-Za-z0-9_-]{43})\s*$/.exec(s);
+    return m ? m[1] : null;
+  }
+  function adopt(raw) { if (store.get('key', null) !== raw) { wipe(); store.set('key', raw); } }
+  function cleanAddress() { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* the link stays in the bar; harmless */ } }
+  function linkFrom(text) {
+    const k = keyIn(text); if (!k) return false;
+    cleanAddress();
+    if (k !== K.raw) { adopt(k); location.reload(); }
+    return true;
+  }
+
   /* ---------- start ---------- */
   function wipe() { ['base', 'ops', 'out', 'seen', 'ok'].forEach(k => store.del(k)); BASE = null; OPS = []; OUT = []; SEEN = {}; DOCS = {}; }
   async function boot() {
     if (!(window.crypto && crypto.subtle && crypto.getRandomValues && window.DecompressionStream)) return null;
-    const m = /[#&]join=([A-Za-z0-9_-]{43})(?=&|$)/.exec(location.hash || '');
-    if (m) {
-      if (store.get('key', null) !== m[1]) { wipe(); store.set('key', m[1]); }
-      try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* the link stays in the bar; harmless */ }
-    }
+    const fromLink = keyIn(location.hash);
+    if (fromLink) { adopt(fromLink); cleanAddress(); }
     const raw = store.get('key', null);
     if (!raw) return null;
-    try { await setKey(raw); } catch (e) { return null; }
+    try { await setKey(raw); } catch (e) { store.del('key'); return null; }
     BASE = store.get('base', null); OPS = store.get('ops', []); OUT = store.get('out', []); SEEN = store.get('seen', {}); SY.lastOk = store.get('ok', 0);
     if (!validBase(BASE)) BASE = null;
     if (!Array.isArray(OPS)) OPS = []; if (!Array.isArray(OUT)) OUT = []; if (!isObj(SEEN)) SEEN = {};
@@ -324,6 +338,22 @@
     return db;
   }
   const ready = boot().catch(() => null);
+  ready.then(() => {
+    window.addEventListener('hashchange', () => { linkFrom(location.hash); });
+    window.addEventListener('storage', e => {
+      if (e.key !== LS + 'key') return;
+      let v = null; try { v = JSON.parse(e.newValue); } catch (err) { /* removed */ }
+      if (v !== K.raw) location.reload();
+    });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && store.get('key', null) !== K.raw) location.reload(); });
+  });
+  const UA = navigator.userAgent || '';
+  const WHERE = {
+    android: /Android/i.test(UA),
+    browser: /EdgA\//.test(UA) ? 'Edge' : /SamsungBrowser\//.test(UA) ? 'Samsung Internet' : /Firefox\//.test(UA) ? 'Firefox' : /OPR\//.test(UA) ? 'Opera' : /Chrome\//.test(UA) ? 'Chrome' : '',
+    installed: !!((window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone)
+  };
+  const HOME = () => location.pathname.replace(/index\.html$/, '');
   const BUILD = ((document.querySelector('meta[name="landing-build"]') || {}).content || '').trim();
 
   /* New versions arrive by themselves: the service worker fetches the new build, then this page reloads once
@@ -361,7 +391,13 @@
     build: BUILD,
     status: () => ({ linked: !!K.key, baseAt: BASE ? BASE.asOf : '', waiting: OUT.length, lastOk: SY.lastOk, taps: OPS.length, err: SY.err, canLink: !!(window.crypto && crypto.subtle && window.DecompressionStream) }),
     sync: () => sync(),
-    unlink: () => { wipe(); store.del('key'); K.key = null; K.raw = null; location.reload(); }
+    unlink: () => { wipe(); store.del('key'); K.key = null; K.raw = null; location.reload(); },
+    /* Linking by hand, and moving the link to another browser on the same phone. The link holds the key: it is only
+       ever shown to, or handed on by, a device that already has it. */
+    link: text => linkFrom(text),
+    joinLink: () => (K.raw ? location.origin + HOME() + '#join=' + K.raw : ''),
+    chromeLink: () => (K.raw ? 'intent://' + location.host + HOME() + '#join=' + K.raw + '#Intent;scheme=https;package=com.android.chrome;end' : ''),
+    where: () => WHERE
   };
   window.claude = { use: async name => { const d = await ready; if (!d) return null; return name === 'db' ? d : name === 'tts' ? tts : name === 'dictation' ? dictation : null; } };
 })();

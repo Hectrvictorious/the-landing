@@ -7,7 +7,7 @@
 <meta name="description" content="One page for the day: the one thing, today, every part of life, and what's coming.">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://ntfy.sh; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="robots" content="noindex, nofollow">
-<meta name="landing-build" content="20261111T012440">
+<meta name="landing-build" content="20261111T020901">
 <meta name="theme-color" content="#1f433a">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -119,6 +119,10 @@ ul { list-style: none; margin: 0; padding: 0; }
 .adot { width: 12px; height: 12px; border-radius: 50%; flex: none; border: 1px solid color-mix(in srgb, var(--ink) 40%, transparent); background: linear-gradient(180deg, var(--a, #999) 0 50%, var(--b, #ccc) 50% 100%); }
 .notice { font-family: var(--font-ui); font-size: 14px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; color: var(--ink-2); }
 .notice.bad { border-color: var(--bad); color: var(--ink); }
+.notice p { margin: 0 0 8px; } .notice p:last-child { margin-bottom: 0; } .notice .row { margin: 8px 0; }
+.linkbox { display: flex; gap: 8px; align-items: stretch; margin: 8px 0; }
+.linkbox .btn { white-space: nowrap; flex: 0 0 auto; }
+.linkbox input { flex: 1 1 auto; min-width: 0; font: inherit; color: var(--ink); background: var(--surface); border: 1.5px solid var(--line); border-radius: 10px; padding: 8px 10px; min-height: 44px; }
 
 /* Edition line and the day's sentence */
 .edition { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }

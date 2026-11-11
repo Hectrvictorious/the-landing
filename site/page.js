@@ -14,7 +14,7 @@
     days: [], dayIdx: 0, loops: {}, gotLoops: false, areas: [], areaMap: {}, stars: [], feeds: [], inbox: [], status: null,
     asks: {}, gotAsks: false, checkins: {}, readings: [], learned: {}, week: null, weekId: '', config: {}, next: null,
     view: 'today', openLoops: {}, openAreas: {}, help: {}, dropArm: null,
-    multi: {}, askAll: false, knowAll: false, readAll: false, scriptOpen: false, appInfo: null, unlinkArm: false,
+    multi: {}, askAll: false, knowAll: false, readAll: false, scriptOpen: false, appInfo: null, unlinkArm: false, linkMiss: false, showLink: false,
     tts: null, speaking: false, dict: null, listening: false, sample: null
   };
 
@@ -160,7 +160,11 @@
   function stateNotice() {
     if (S.nodb) {
       if (!window.LandingApp) return '<p class="notice">Your notes live in your Claude account. Open this page signed in as yourself to see your day.</p>';
-      return '<p class="notice">' + (window.LandingApp.status().canLink ? 'This app isn\'t linked to your notes yet. Open The Landing in Claude on this device, go to Horizon, and tap Open the phone app.' : 'This browser is too old to run the app. Try it in Chrome.') + '</p>';
+      if (!window.LandingApp.status().canLink) return '<p class="notice">This browser is too old to run the app. Try it in Chrome.</p>';
+      return '<div class="notice"><p><b>This app isn\'t linked to your notes yet.</b></p>' +
+        '<p>In Claude, open The Landing, go to Horizon, and tap Open the phone app. If that opens in a different browser than this one, tap Copy the link there instead and paste it here.</p>' +
+        '<div class="linkbox"><input type="text" class="link-in" placeholder="Paste the link here" aria-label="Paste the link here" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn small primary" type="button" data-act="applink">Link it</button></div>' +
+        (S.linkMiss ? '<p class="meta">That isn\'t the link. The right one ends with "join=" and a long run of letters.</p>' : '') + '</div>';
     }
     if (S.err) return '<p class="notice bad">Your notes can\'t be reached right now (' + esc(S.err) + '). Close and reopen the page in a minute.</p>';
     if (S.slow && !S.got) return '<p class="notice">Still reaching your notes. If you\'re on the boat with no signal, this fills in once you\'re back in range.</p>';
@@ -285,7 +289,7 @@
       paint($('todayFeeds'), ''); paint($('todayComing'), ''); paint($('todayWins'), ''); paint($('todayFoot'), ''); renderCaps(); return;
     }
     const isToday = d.date === todayYMD();
-    let h = note;
+    let h = note + hopNotice();
     h += '<div class="edition"><p class="meta"><b>' + esc(d.long || fLong.format(asDate(d.date))) + '</b> · ' + esc(d.edition || 'Edition') + (d.writtenLabel ? ', written ' + esc(d.writtenLabel) : '') + '</p>' +
       (S.days.length > 1 ? '<div class="ed-nav">' +
       '<button type="button" data-act="older"' + (S.dayIdx >= S.days.length - 1 ? ' disabled' : '') + ' aria-label="Earlier edition">‹ Earlier</button>' +
@@ -425,6 +429,29 @@
   }
 
   const safeAppUrl = u => (/^https:\/\/[a-z0-9.-]+\.github\.io\/[A-Za-z0-9._\/-]*$/.test(String(u || '')) ? String(u) : '');
+  /* When copying isn't allowed where the page is running, show the link so it can be copied by hand. */
+  function linkField(link) { return S.showLink ? '<div class="linkbox"><input type="text" class="link-out" readonly value="' + esc(link) + '" aria-label="The link"></div><p class="meta">Press and hold the link, choose Select all, then Copy.</p>' : ''; }
+  function copyLink(link) {
+    const shown = () => { S.showLink = true; schedule(); toast('Couldn\'t copy from here. The link is shown below instead.'); };
+    if (!link) return;
+    if (!navigator.clipboard || !navigator.clipboard.writeText) { shown(); return; }
+    navigator.clipboard.writeText(link).then(() => toast('Copied. Paste it into the box in the other browser.')).catch(shown);
+  }
+  /* On an Android phone, in a browser other than Chrome: one tap hands the link to Chrome. */
+  function chromeHop(A, cls) {
+    const w = A.where ? A.where() : {}; const link = A.chromeLink ? A.chromeLink() : '';
+    return (w.android && w.browser && w.browser !== 'Chrome' && link) ? '<a class="' + cls + '" href="' + esc(link) + '">Open in Chrome</a>' : '';
+  }
+  function hopNotice() {
+    const A = window.LandingApp; if (!A || !A.where || !A.status().linked) return '';
+    const w = A.where(); if (!w.android || !w.browser || w.browser === 'Chrome' || w.installed) return '';
+    let stay = false; try { stay = localStorage.getItem('tl.stay') === '1'; } catch (e) { /* no storage */ }
+    if (stay) return '';
+    return '<div class="notice"><p><b>This opened in ' + esc(w.browser) + '.</b> Rather have the app in Chrome?</p>' +
+      '<div class="row">' + chromeHop(A, 'btn small primary') + '<button class="btn small quiet" type="button" data-act="appstay">Stay in ' + esc(w.browser) + '</button></div>' +
+      '<p class="meta">If that button does nothing, go to Horizon here and tap Copy the link, then paste it into the app in Chrome.</p></div>';
+  }
+
   function appBlock() {
     const A = window.LandingApp;
     if (A) {
@@ -436,14 +463,19 @@
         (st.err ? '<p class="notice bad">' + esc(st.err) + '</p>' : '') +
         '<p class="meta">Your taps are saved on this device first, then sent sealed. The page in Claude catches up each morning.</p>' +
         '<div class="row"><button class="btn small" type="button" data-act="appsync">Check for updates</button>' +
-        (st.linked ? '<button class="btn small quiet" type="button" data-act="appunlink">' + (S.unlinkArm ? 'Tap again to unlink' : 'Unlink this device') + '</button>' : '') + '</div></div></section>';
+        (st.linked ? '<button class="btn small quiet" type="button" data-act="appunlink">' + (S.unlinkArm ? 'Tap again to unlink' : 'Unlink this device') + '</button>' : '') + '</div>' +
+        (st.linked && A.joinLink ? '<p class="meta">Want this in a different browser on this phone?</p><div class="row">' + chromeHop(A, 'btn small') +
+          '<button class="btn small" type="button" data-act="appcopy">Copy the link</button></div>' + linkField(A.joinLink()) : '') +
+        '</div></section>';
     }
     const app = S.appInfo || {}; const url = safeAppUrl(app.url);
     if (!url || !/^[A-Za-z0-9_-]{43}$/.test(String(app.key || ''))) return '';
     return '<section class="sec" aria-labelledby="apH"><h2 class="h" id="apH">The phone app</h2><div class="card">' +
       '<p>The same page as its own app: its own icon, no address bar, and it opens with no signal.</p>' +
       '<ol class="howto"><li>On your phone, tap the button below.</li><li>In the browser\'s menu, choose Add to Home screen (or Install app).</li><li>Open it from the new icon.</li></ol>' +
-      '<div class="row"><a class="btn primary" href="' + esc(url + '#join=' + app.key) + '" target="_blank" rel="noopener">Open the phone app</a></div>' +
+      '<div class="row"><a class="btn primary" href="' + esc(url + '#join=' + app.key) + '" target="_blank" rel="noopener">Open the phone app</a>' +
+      '<button class="btn small" type="button" data-act="copylink">Copy the link</button></div>' + linkField(url + '#join=' + app.key) +
+      '<p class="meta">The button opens in your phone\'s default browser. If that isn\'t the one you want the app in, tap Copy the link, open the app in the browser you do want, and paste it into the box there.</p>' +
       '<p class="meta">The app and this page trade notes once a day, with the morning edition: what you tap in one shows in the other the next morning.</p>' +
       '<p class="meta">That button carries this page\'s key. Only use it on your own devices, and don\'t forward the link it opens.</p></div></section>';
   }
@@ -674,6 +706,14 @@
     older() { if (S.dayIdx < S.days.length - 1) { S.dayIdx++; schedule(); } },
     newer() { if (S.dayIdx > 0) { S.dayIdx--; schedule(); } },
     script() { S.scriptOpen = !S.scriptOpen; schedule(); },
+    applink(id, btn) {
+      const box = btn && btn.closest('.linkbox'); const inp = box && box.querySelector('input'); const v = inp ? inp.value : '';
+      if (window.LandingApp && window.LandingApp.link && window.LandingApp.link(v)) { toast('Linked. Opening your page…'); return; }
+      S.linkMiss = true; schedule();
+    },
+    appcopy() { if (window.LandingApp && window.LandingApp.joinLink) copyLink(window.LandingApp.joinLink()); },
+    appstay() { try { localStorage.setItem('tl.stay', '1'); } catch (e) { /* it will ask again next time */ } schedule(); },
+    copylink() { const app = S.appInfo || {}; const url = safeAppUrl(app.url); if (url && /^[A-Za-z0-9_-]{43}$/.test(String(app.key || ''))) copyLink(url + '#join=' + app.key); },
     appsync() { if (window.LandingApp) { toast('Checking…'); window.LandingApp.sync().then(() => { toast('Up to date.'); schedule(); }); } },
     appunlink() {
       if (!window.LandingApp) return;
@@ -840,6 +880,7 @@
   /* Enter in a one-line field presses the button beside it. */
   document.addEventListener('keydown', ev => {
     if (ev.key !== 'Enter' || !ev.target || ev.target.tagName !== 'INPUT') return;
+    const lb = ev.target.closest('.linkbox'); if (lb) { const go = lb.querySelector('button[data-act="applink"]'); if (go) { ev.preventDefault(); go.click(); } return; }
     const scope = ev.target.closest('.ask, .know, .add') || ev.target.closest('section'); if (!scope) return;
     const btn = scope.querySelector('button[data-act="anstext"], button[data-act="ansmulti"], button[data-act="fixsave"], button[data-act="fbsave"], button[data-act="addloop"], button[data-act="addreading"]');
     if (btn) { ev.preventDefault(); btn.click(); }
