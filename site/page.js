@@ -432,7 +432,7 @@
       const when = Date.parse(st.baseAt || '') ? fDayTime.format(new Date(st.baseAt)) : '';
       return '<section class="sec" aria-labelledby="apH"><h2 class="h" id="apH">This device</h2><div class="card">' +
         '<p>' + (st.linked ? 'Linked. ' + (when ? 'The newest edition here was written ' + esc(when) + '.' : 'No edition has arrived yet. The next one comes about 9:20 in the morning.') : 'Not linked yet.') +
-        (st.waiting ? ' ' + st.waiting + ' tap' + (st.waiting === 1 ? ' is' : 's are') + ' waiting for a signal.' : st.linked ? ' Everything you\'ve tapped has been sent.' : '') + '</p>' +
+        (st.waiting ? ' ' + st.waiting + ' tap' + (st.waiting === 1 ? ' is' : 's are') + ' waiting to go out. They\'re saved here and will send by themselves.' : st.linked ? ' Everything you\'ve tapped has been sent.' : '') + '</p>' +
         (st.err ? '<p class="notice bad">' + esc(st.err) + '</p>' : '') +
         '<p class="meta">Your taps are saved on this device first, then sent sealed. The page in Claude catches up each morning.</p>' +
         '<div class="row"><button class="btn small" type="button" data-act="appsync">Check for updates</button>' +

@@ -19,6 +19,10 @@ Nothing personal is in this repository. The page's words and numbers arrive at r
 - The relay forgets a message after about 12 hours, so the workflow keeps a sealed copy of the newest editions and
   the recent taps in `data/sync.json`. That file is published with the site but never committed, so there is no
   history of it here.
+- The relay allows each internet address a set number of messages a day. An agent's sandbox shares its addresses
+  with many others, and some are already over that limit, so `landing_sync.py` posts an edition over a fresh
+  connection until one is accepted. The app does the same in its own way: a refused tap waits on the device and
+  goes out again by itself.
 
 ## What's in here
 

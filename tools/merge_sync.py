@@ -60,8 +60,12 @@ if SITE != '/':
 have = {e['id'] for e in events}
 live_ids = sorted(have)
 
-# 2. Add what is new on the relay.
-code, body = curl(f'{RELAY}{TOPIC}/json?poll=1&since=12h')
+# 2. Add what is new on the relay. The relay limits each address, and build machines share theirs, so a refusal
+#    gets a few more tries; if it still says no, the copy simply stays as it is until the next run.
+for attempt in range(4):
+    code, body = curl(f'{RELAY}{TOPIC}/json?poll=1&since=12h')
+    if code == 200 or (code and code != 429 and code < 500): break
+    time.sleep(6)
 added = 0
 if code != 200:
     print('relay did not answer:', code, (body or '')[:200], file=sys.stderr)

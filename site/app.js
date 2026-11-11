@@ -68,7 +68,7 @@
   let DOCS = {};         // BASE.docs with OPS applied: what the page reads
   const PARTS = {};      // groups still arriving
   const BAD = {};        // groups that wouldn't open (kept for this visit only)
-  const SY = { lastOk: 0, lastTry: 0, backoff: 0, flushing: false, polling: false, archIds: null, resent: {}, err: '' };
+  const SY = { lastOk: 0, lastTry: 0, backoff: 0, refused: 0, flushing: false, polling: false, archIds: null, resent: {}, err: '' };
   const listeners = new Set();
 
   function merge(a, b) { Object.keys(b).forEach(k => { const v = b[k]; if (isObj(v) && isObj(a[k])) merge(a[k], v); else a[k] = clone(v); }); return a; }
@@ -159,14 +159,22 @@
   }
   let flushT = 0;
   function flushSoon() { clearTimeout(flushT); flushT = setTimeout(flush, 400); }
+  /* The relay allows each network address so many messages. When it says "not now" (429), the outbox waits, a little
+     longer each time, and then tries again by itself. Nothing is lost meanwhile: the taps are saved on this device. */
+  const REFUSED_WAIT = [20000, 60000, 300000, 600000];
   async function flush() {
-    if (SY.flushing || !OUT.length || !K.key || Date.now() < SY.backoff) return;
+    if (SY.flushing || !OUT.length || !K.key) return;
+    if (Date.now() < SY.backoff) { clearTimeout(flushT); flushT = setTimeout(flush, SY.backoff - Date.now() + 300); return; }
     SY.flushing = true;
     try {
       while (OUT.length) {
         const r = await fetchT(RELAY + K.topic, { method: 'POST', body: JSON.stringify(OUT[0]) }, 12000);
-        if (r.status === 429) { SY.backoff = Date.now() + 10 * 60000; break; }
+        if (r.status === 429) {
+          const wait = REFUSED_WAIT[Math.min(SY.refused, REFUSED_WAIT.length - 1)]; SY.refused++;
+          SY.backoff = Date.now() + wait; clearTimeout(flushT); flushT = setTimeout(flush, wait + 300); break;
+        }
         if (r.status >= 500) break;
+        SY.refused = 0;
         OUT.shift(); save('out');
       }
     } catch (e) { /* no signal: the outbox keeps it for next time */ }

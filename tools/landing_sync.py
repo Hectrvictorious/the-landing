@@ -15,7 +15,7 @@ Usage:
   landing_sync.py publish --export DIR --key-file FILE --out DIR
 An export is one folder per collection (areas, loops, days, meta, ...) holding one JSON file per document, either
 the document's fields or {id, data, version}. Needs: pip install cryptography."""
-import argparse, base64, copy, datetime, gzip, hashlib, json, os, re, secrets, subprocess, sys, time
+import argparse, base64, copy, datetime, gzip, hashlib, json, os, re, secrets, subprocess, sys, tempfile, time
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -63,10 +63,54 @@ def valid_env(e, fp):
 
 
 def curl(args, timeout=40):
-    r = subprocess.run(['curl', '-sS', '-L', '-m', str(timeout), '-A', UA, '-w', '\n%{http_code}'] + args, capture_output=True, text=True, timeout=timeout + 20)
+    try: r = subprocess.run(['curl', '-sS', '-L', '-m', str(timeout), '-A', UA, '-w', '\n%{http_code}'] + args, capture_output=True, text=True, timeout=timeout + 20)
+    except Exception as err: return 0, str(err)[:200]
     if r.returncode != 0: return 0, r.stderr.strip()[:200]
     body, _, code = r.stdout.rpartition('\n')
     return int(code or 0), body
+
+
+# The relay allows each internet address so many requests and messages a day. An agent's sandbox shares its
+# addresses with many others, and every new connection can leave through a different one: some are already over
+# the limit (the relay answers 429) while others are fine. So a refusal is tried again on a new connection.
+def get_retry(url, tries=6):
+    code, body = 0, ''
+    for attempt in range(tries):
+        code, body = curl([url])
+        if code not in (0, 429) and code < 500: break
+        time.sleep(1.5 + attempt)
+    return code, body
+
+
+def post_all(url, envs, attempts=40):
+    """Post every envelope. Each round sends all that are still waiting over ONE connection (one curl run), so
+    whatever that connection's address is allowed goes through; the rest wait for the next connection.
+    Returns (indexes never accepted, last answer, rounds used)."""
+    waiting, last, rounds, dead = list(range(len(envs))), 0, 0, 0
+    with tempfile.TemporaryDirectory() as tmp:
+        for i, e in enumerate(envs):
+            with open(os.path.join(tmp, f'{i}.json'), 'w') as fh: fh.write(json.dumps(e, separators=(',', ':')))
+        for attempt in range(attempts):
+            rounds += 1; args = []
+            for n, i in enumerate(waiting):
+                if n: args.append('--next')
+                args += ['-sS', '-m', '40', '-A', UA, '-o', os.devnull, '-w', '%{http_code}\n', '-X', 'POST', '-H', 'Content-Type: text/plain',
+                         '--data-binary', '@' + os.path.join(tmp, f'{i}.json'), url]
+            try: codes = subprocess.run(['curl'] + args, capture_output=True, text=True, timeout=60 * len(waiting) + 30).stdout.split()
+            except Exception: codes = []
+            still, answered = [], False
+            for n, i in enumerate(waiting):
+                code = int(codes[n]) if n < len(codes) and codes[n].isdigit() else 0
+                answered = answered or code > 0
+                if code == 200: continue
+                still.append(i); last = code if answered else last
+            waiting = still
+            if not waiting: return [], 200, rounds
+            if last not in (0, 429) and last < 500: break          # refused for a reason another connection won't fix
+            dead = 0 if answered else dead + 1
+            if dead >= 6: last = 0; break                          # nothing is answering at all: no network, or the relay is down
+            time.sleep(1.5 if attempt < 12 else 4)
+    return waiting, last, rounds
 
 
 # ---------- the export ----------
@@ -181,7 +225,7 @@ def merge(a, b):
 
 def fetch_envelopes(key, relay, site):
     envs, notes = {}, []
-    code, body = curl([f'{relay}{key.topic}/json?poll=1&since=12h'])
+    code, body = get_retry(f'{relay}{key.topic}/json?poll=1&since=12h')
     if code == 200:
         for line in body.splitlines():
             try:
@@ -191,11 +235,16 @@ def fetch_envelopes(key, relay, site):
                     if valid_env(e, key.fp): envs[e['id']] = e
             except Exception: pass
     else: notes.append(f'the relay did not answer ({code})')
-    code, body = curl([f'{site}data/sync.json?t={int(time.time())}'])
+    code, body = get_retry(f'{site}data/sync.json?t={int(time.time())}', tries=3)
     if code == 200:
         try:
+            newest = 0
             for e in json.loads(body).get('events', []):
-                if valid_env(e, key.fp): envs.setdefault(e['id'], e)
+                if valid_env(e, key.fp):
+                    envs.setdefault(e['id'], e)
+                    if e['k'] == 's': newest = max(newest, e['ts'])
+            days = (time.time() - newest / 1000) / 86400 if newest else 0
+            if days > 2.2: notes.append(f"the site's sealed copy last received an edition {days:.0f} days ago")
         except Exception: notes.append('the site\'s sealed copy was unreadable')
     elif code != 404: notes.append(f'the site\'s sealed copy did not answer ({code})')
     return list(envs.values()), notes
@@ -285,17 +334,15 @@ def cmd_publish(a):
     base = {'v': 1, 'sid': sid, 'asOf': now.isoformat(timespec='milliseconds').replace('+00:00', 'Z'), 'folded': sorted(folded) if isinstance(folded, dict) else [], 'docs': keep}
     packed = gzip.compress(json.dumps(base, ensure_ascii=False, separators=(',', ':')).encode(), 9)
     envs = seal_group(key, 's', packed, sid, int(now.timestamp() * 1000))
-    sent = 0
-    for e in envs:
-        for attempt in range(6):
-            code, body = curl(['-X', 'POST', '-H', 'Content-Type: text/plain', '--data-binary', json.dumps(e, separators=(',', ':')), f'{a.relay}{key.topic}'])
-            if code == 200: sent += 1; break
-            time.sleep(20 if code == 429 else 4)
-        else:
-            print(json.dumps({'ok': False, 'sent': sent, 'of': len(envs), 'why': f'the relay answered {code}'})); sys.exit(2)
-        time.sleep(0.4)
     os.makedirs(a.out, exist_ok=True)
-    summary = {'ok': True, 'edition': sid, 'asOf': base['asOf'], 'documents': len(keep), 'bytes': len(packed), 'parts': len(envs)}
+    left, code, rounds = post_all(f'{a.relay}{key.topic}', envs)
+    if left:
+        why = ('the relay turned every connection away: its daily limit for shared addresses was used up' if code == 429
+               else 'the relay could not be reached' if code == 0 else f'the relay answered {code}')
+        summary = {'ok': False, 'sent': len(envs) - len(left), 'of': len(envs), 'connections': rounds, 'why': why}
+        json.dump(summary, open(os.path.join(a.out, 'published.json'), 'w'))
+        print(json.dumps(summary)); sys.exit(2)
+    summary = {'ok': True, 'edition': sid, 'asOf': base['asOf'], 'documents': len(keep), 'bytes': len(packed), 'parts': len(envs), 'connections': rounds}
     json.dump(summary, open(os.path.join(a.out, 'published.json'), 'w'))
     print(json.dumps(summary))
 
