@@ -3,7 +3,7 @@
    notices a new version the next time the app is opened (or comes back to the screen), caches it fresh, takes over,
    and tells open pages. A page reloads only if its own build is different. Nothing ever needs reinstalling.
    data/sync.json (the sealed copy of the latest edition) is network-first with a cached fallback. */
-const BUILD = '20261111T011300';
+const BUILD = '20261111T012440';
 const VERSION = 'landing-' + BUILD;
 const SHELL = ['./', './index.html', './app.js', './page.js', './manifest.json', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 let isUpdate = false;

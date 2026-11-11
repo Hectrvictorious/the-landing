@@ -80,7 +80,8 @@
   function rebuild() {
     const docs = clone((BASE && BASE.docs) || {});
     const folded = new Set((BASE && BASE.folded) || []);
-    OPS = OPS.filter(o => !folded.has(o.id)).sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1));
+    const old = Date.now() - 14 * DAY;      // an edition names the taps it has taken in for about a week; nothing waits longer than two
+    OPS = OPS.filter(o => !folded.has(o.id) && o.ts > old).sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1));
     OPS.forEach(o => { try { applyOp(docs, o); } catch (e) { /* skip one bad op */ } });
     DOCS = docs;
   }

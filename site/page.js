@@ -431,7 +431,7 @@
       const st = A.status();
       const when = Date.parse(st.baseAt || '') ? fDayTime.format(new Date(st.baseAt)) : '';
       return '<section class="sec" aria-labelledby="apH"><h2 class="h" id="apH">This device</h2><div class="card">' +
-        '<p>' + (st.linked ? 'Linked. ' + (when ? 'The newest edition here was written ' + esc(when) + '.' : 'No edition has arrived yet. The next one comes about 9:20 in the morning.') : 'Not linked yet.') +
+        '<p>' + (st.linked ? 'Linked. ' + (when ? 'The newest edition here arrived ' + esc(when) + '.' : 'No edition has arrived yet. The next one comes about 9:20 in the morning.') : 'Not linked yet.') +
         (st.waiting ? ' ' + st.waiting + ' tap' + (st.waiting === 1 ? ' is' : 's are') + ' waiting to go out. They\'re saved here and will send by themselves.' : st.linked ? ' Everything you\'ve tapped has been sent.' : '') + '</p>' +
         (st.err ? '<p class="notice bad">' + esc(st.err) + '</p>' : '') +
         '<p class="meta">Your taps are saved on this device first, then sent sealed. The page in Claude catches up each morning.</p>' +
@@ -444,6 +444,7 @@
       '<p>The same page as its own app: its own icon, no address bar, and it opens with no signal.</p>' +
       '<ol class="howto"><li>On your phone, tap the button below.</li><li>In the browser\'s menu, choose Add to Home screen (or Install app).</li><li>Open it from the new icon.</li></ol>' +
       '<div class="row"><a class="btn primary" href="' + esc(url + '#join=' + app.key) + '" target="_blank" rel="noopener">Open the phone app</a></div>' +
+      '<p class="meta">The app and this page trade notes once a day, with the morning edition: what you tap in one shows in the other the next morning.</p>' +
       '<p class="meta">That button carries this page\'s key. Only use it on your own devices, and don\'t forward the link it opens.</p></div></section>';
   }
 
