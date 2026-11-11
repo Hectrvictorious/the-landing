@@ -105,34 +105,32 @@ def get_retry(url, tries=6):
     return code, body
 
 
-def post_all(url, envs, attempts=40):
-    """Post every envelope. Each round sends all that are still waiting over ONE connection (one curl run), so
-    whatever that connection's address is allowed goes through; the rest wait for the next connection.
+def post_all(url, envs, attempts=90):
+    """Post every envelope. Each round sends all that are still waiting over ONE connection (one curl run), and
+    stops at the first refusal, so an address that is over its limit costs a single request. Whatever a connection
+    accepts is done; the rest wait for the next connection.
     Returns (indexes never accepted, last answer, rounds used)."""
     waiting, last, rounds, dead = list(range(len(envs))), 0, 0, 0
     with tempfile.TemporaryDirectory() as tmp:
         for i, e in enumerate(envs):
             with open(os.path.join(tmp, f'{i}.json'), 'w') as fh: fh.write(json.dumps(e, separators=(',', ':')))
         for attempt in range(attempts):
-            rounds += 1; args = []
+            rounds += 1; args = ['--fail-early']
             for n, i in enumerate(waiting):
                 if n: args.append('--next')
-                args += ['-sS', '-m', '40', '-A', UA, '-o', os.devnull, '-w', '%{http_code}\n', '-X', 'POST', '-H', 'Content-Type: text/plain',
+                args += ['-sS', '-f', '-m', '40', '-A', UA, '-o', os.devnull, '-w', '%{http_code}\n', '-X', 'POST', '-H', 'Content-Type: text/plain',
                          '--data-binary', '@' + os.path.join(tmp, f'{i}.json'), url]
-            try: codes = subprocess.run(['curl'] + args, capture_output=True, text=True, timeout=60 * len(waiting) + 30).stdout.split()
+            try: codes = [int(c) for c in subprocess.run(['curl'] + args, capture_output=True, text=True, timeout=60 * len(waiting) + 30).stdout.split() if c.isdigit()]
             except Exception: codes = []
-            still, answered = [], False
-            for n, i in enumerate(waiting):
-                code = int(codes[n]) if n < len(codes) and codes[n].isdigit() else 0
-                answered = answered or code > 0
-                if code == 200: continue
-                still.append(i); last = code if answered else last
-            waiting = still
+            # codes holds one answer per envelope tried, in order; curl stopped after the first one that wasn't accepted
+            waiting = [i for n, i in enumerate(waiting) if not (n < len(codes) and codes[n] == 200)]
+            answered = any(c > 0 for c in codes)
+            if answered: last = next((c for c in codes if c != 200), 200)
             if not waiting: return [], 200, rounds
-            if last not in (0, 429) and last < 500: break          # refused for a reason another connection won't fix
+            if answered and last not in (200, 429) and last < 500: break   # refused for a reason another connection won't fix
             dead = 0 if answered else dead + 1
-            if dead >= 6: last = 0; break                          # nothing is answering at all: no network, or the relay is down
-            time.sleep(1.5 if attempt < 12 else 4)
+            if dead >= 6: last = 0; break                                    # nothing is answering at all: no network, or the relay is down
+            time.sleep(1.5 if attempt < 30 else 3)
     return waiting, last, rounds
 
 
