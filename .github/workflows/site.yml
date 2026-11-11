@@ -1,0 +1,62 @@
+name: The Landing
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '11,41 * * * *'   # every half hour, off the busy :00/:30 marks: refresh the sealed copy of the app's messages
+  workflow_dispatch:
+
+permissions:
+  contents: read    # nothing is ever committed back: the sealed copy lives only in the published site
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      deploy: ${{ steps.merge.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Refresh the sealed copy (this step never sees the key)
+        id: merge
+        env:
+          SYNC_TOPIC: tl12f4f47c0d350bcd72af38
+          SYNC_FP: e8deefc0
+          SITE_URL: https://hectrvictorious.github.io/the-landing/
+        run: |
+          out=$(python3 tools/merge_sync.py site/data/sync.json)
+          echo "$out"
+          if [ "${{ github.event_name }}" = "schedule" ] && echo "$out" | grep -q '^unchanged'; then
+            echo "deploy=no" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=yes" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/configure-pages@v5
+        if: steps.merge.outputs.deploy == 'yes'
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.merge.outputs.deploy == 'yes'
+        with:
+          path: site
+          retention-days: 1
+
+  deploy:
+    needs: build
+    if: needs.build.outputs.deploy == 'yes'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,5 @@
+# The sealed copy of the app's messages is built by the workflow and published with the site, never committed.
+site/data/sync.json
+*.key
+secret/
+__pycache__/
