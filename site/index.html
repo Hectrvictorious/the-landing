@@ -7,7 +7,7 @@
 <meta name="description" content="One page for the day: the one thing, today, every part of life, and what's coming.">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://ntfy.sh; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="robots" content="noindex, nofollow">
-<meta name="landing-build" content="20261111T024904">
+<meta name="landing-build" content="20261111T151530">
 <meta name="theme-color" content="#1f433a">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -292,6 +292,31 @@ ul { list-style: none; margin: 0; padding: 0; }
 .backrow { border-top: 1px solid var(--line); padding: 10px 0; display: flex; flex-direction: column; gap: 6px; }
 .backrow:first-child { border-top: 0; padding-top: 0; }
 .backrow h3 { font-family: var(--font-display); font-weight: 700; font-size: 18px; line-height: 1.25; }
+/* one habit at a time: the plan, one question a day, and a record where a blank is only a blank */
+.habit { background: var(--surface); border: 1px solid var(--line); border-left: 5px solid var(--spruce); border-radius: 4px 12px 12px 4px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.habit .eyebrow { font-family: var(--font-display); font-weight: 700; font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-2); }
+.habit h3 { font-size: 21px; font-weight: 700; }
+.plan { font-family: var(--font-display); font-weight: 500; font-size: 20px; line-height: 1.25; text-wrap: pretty; }
+.plan b { font-weight: 700; }
+.hdots { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.hdots i { width: 13px; height: 13px; border-radius: 50%; border: 1.5px dotted var(--quiet); display: block; flex: none; }
+.hdots i.yes { background: var(--good); border: 1.5px solid var(--good); }
+.hdots i.no { border: 1.5px solid var(--ink-2); }
+.hdots i.tod { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--ink-2); margin: 0 4px; }
+.hcal { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; max-width: 380px; }
+.hcal span { font-family: var(--font-display); font-weight: 600; font-size: 13px; color: var(--muted); text-align: center; }
+.hcal button { font-family: var(--font-display); font-weight: 600; font-size: 16px; font-variant-numeric: tabular-nums; min-height: 40px; border-radius: 10px; border: 1.5px dotted var(--quiet); background: transparent; color: var(--ink-2); cursor: pointer; padding: 0; }
+.hcal button.yes { background: var(--good); border: 1.5px solid var(--good); color: var(--surface); }
+.hcal button.no { border: 1.5px solid var(--ink-2); color: var(--muted); text-decoration: line-through; }
+.hcal button.tod { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--ink-2); }
+.hcal button[disabled] { border: 0; color: var(--line); cursor: default; }
+.hedit label { font-family: var(--font-ui); font-size: 13px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+.hidea { border-top: 1px solid var(--line); padding: 12px 0; display: flex; flex-direction: column; gap: 6px; }
+.hidea:first-child { border-top: 0; padding-top: 0; }
+.hidea h3 { font-family: var(--font-display); font-weight: 700; font-size: 19px; line-height: 1.2; }
+.hwhy p { font-size: 15.5px; color: var(--ink-2); max-width: 40em; }
+.hwhy p + p { margin-top: 8px; }
+.hwhy b { font-family: var(--font-display); font-weight: 700; font-size: 16.5px; color: var(--ink); }
 .howto { margin: 0; padding-left: 22px; list-style: decimal; display: flex; flex-direction: column; gap: 4px; }
 a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 

@@ -15,6 +15,7 @@
     asks: {}, gotAsks: false, checkins: {}, readings: [], learned: {}, week: null, weekId: '', config: {}, next: null,
     view: 'today', openLoops: {}, openAreas: {}, help: {}, dropArm: null,
     multi: {}, askAll: false, knowAll: false, readAll: false, scriptOpen: false, appInfo: null, unlinkArm: false, linkMiss: false, showLink: false, prefs: {}, handNote: {}, handOpen: {}, handFix: {},
+    habits: {}, gotHabits: false, hEdit: null, hArm: null, hWhy: false,
     tts: null, speaking: false, dict: null, listening: false, sample: null
   };
 
@@ -193,7 +194,7 @@
     const h = hand(L); const id = esc(L.id); const st = h ? String(h.status || '') : '';
     const field = (ph, act, label) => '<div class="linkbox"><input class="hand-in" type="text" maxlength="600" placeholder="' + ph + '" aria-label="' + ph + '"><button class="btn small primary" type="button" data-act="' + act + '" data-id="' + id + '">' + label + '</button></div>';
     if (st === 'asked') {
-      return '<div class="hand"><p class="hand-h">Handed to Claude</p><p class="meta">' + (h.changes ? 'Sent back with your changes. ' : '') + 'It comes back with the next edition: about 1:15 in the afternoon, or 9:20 in the morning.</p>' +
+      return '<div class="hand"><p class="hand-h">Handed to Claude</p><p class="meta">' + (h.changes ? 'Sent back with your changes. ' : '') + 'It comes back with the next edition: about 1:15 in the afternoon, or before 9 in the morning.</p>' +
         (h.changes ? '<p class="meta">What you asked to change: ' + esc(h.changes) + '</p>' : '') + (h.note ? '<p class="meta">Your note: ' + esc(h.note) + '</p>' : '') +
         (live ? (S.handNote[L.id] ? field('Anything Claude should know?', 'handnote', 'Save') :
           '<div class="row"><button class="link" type="button" data-act="handnoteopen" data-id="' + id + '">' + (h.note ? 'Change the note' : 'Add a note for Claude') + '</button><button class="link" type="button" data-act="handback" data-id="' + id + '">Take it back</button></div>') : '') + '</div>';
@@ -218,6 +219,166 @@
     if (!list.length) return '';
     return '<section class="sec" aria-labelledby="bkH"><h2 class="h" id="bkH">Back from Claude · ' + list.length + '</h2><div>' + list.map(L =>
       '<div class="backrow"><h3>' + esc(L.title) + '</h3>' + handBlock(L, live) + '</div>').join('') + '</div></section>';
+  }
+
+  /* ---------- one habit at a time ----------
+     habits/<id>: { title, anchor, tiny, after, when, area, why, status idea|building|paused|kept|dropped, startedOn, keptOn,
+     days { ymd: 'yes'|'no' }, miss { ymd: forgot|time|energy|skip }, feel { ymd: effort|easier|auto }, note, suggest { anchor, tiny, why, on },
+     suggestAnswered, adjustOn, keepAskedOn, rhythmId, reading }. Only one is "building" at a time, and the page asks about it once a day.
+     A day with no answer is a blank, never a miss. The run reads the answers and may leave a note or one suggestion. */
+  const habitList = () => Object.keys(S.habits).map(k => S.habits[k]).filter(H => H && !H.deleted && (H.title || H.tiny));
+  const building = () => habitList().filter(H => H.status === 'building').sort((a, b) => String(b.startedOn || '').localeCompare(String(a.startedOn || '')) || String(a.id).localeCompare(String(b.id)))[0] || null;
+  const hSay = (H, d) => { const v = H && H.days && H.days[d]; return v === 'yes' || v === 'no' ? v : ''; };
+  const trimEnd = s => String(s == null ? '' : s).trim().replace(/[.!\s]+$/, '');
+  const cleanAnchor = s => trimEnd(s).replace(/^after\s+/i, '');
+  const cleanTiny = s => trimEnd(s).replace(/^(and\s+|then\s+)?i(\s+will|['’]ll)\s+/i, '');
+  const planHtml = H => { const a = cleanAnchor(H.anchor), t = cleanTiny(H.tiny) || trimEnd(H.title); return (a ? 'After ' + esc(a) + ', I will ' : 'I will ') + '<b>' + esc(t) + '</b>.'; };
+  const planText = H => { const a = cleanAnchor(H.anchor), t = cleanTiny(H.tiny) || trimEnd(H.title); return (a ? 'After ' + a + ', I will ' : 'I will ') + t + '.'; };
+  const FEELS = [['effort', 'I have to push'], ['easier', 'Getting easier'], ['auto', 'I just do it']];
+  const MISSES = [['forgot', 'Forgot'], ['time', 'No time'], ['energy', 'Low energy'], ['skip', 'Didn’t want to']];
+  const WHENS = [['morning', 'Morning'], ['afternoon', 'Afternoon'], ['evening', 'Evening']];
+  const DEF_ANCHORS = [{ t: 'I sit down at my desk', w: 'morning' }, { t: 'I finish lunch', w: 'afternoon' }, { t: 'I finish dinner', w: 'evening' }, { t: 'I get out of the shower', w: 'evening' }];
+  const anchorChips = () => { const c = cfgList('anchors').filter(x => x && x.t); return c.length ? c : DEF_ANCHORS; };
+  const hSug = H => { const g = H && H.suggest; return g && typeof g === 'object' && g.on && H.suggestAnswered !== g.on && (g.anchor || g.tiny) ? g : null; };
+  function hQuiet() { try { const v = localStorage.getItem('tl.hquiet') || ''; return validYMD(v) && dayDiff(todayYMD(), v) < 7; } catch (e) { return false; } }
+  function hStats(H) {
+    const t = todayYMD(); const start = validYMD(H.startedOn) && H.startedOn <= t ? H.startedOn : t;
+    const n = dayDiff(t, start) + 1;                        // which day of building this is, today included
+    const span = Math.min(n, 14); let yes = 0, yes21 = 0, off = 0, total = 0;
+    for (let i = 0; i < n; i++) { const v = hSay(H, addDays(t, -i)); if (v !== 'yes') continue; total++; if (i < span) yes++; if (i < 21) yes21++; }
+    for (let i = 1; i < n && i <= 7; i++) { if (hSay(H, addDays(t, -i)) === 'no') off++; else break; }   // "not done" days in a row, ending yesterday
+    const fd = Object.keys(H.feel || {}).filter(d => validYMD(d) && H.feel[d] && d >= start).sort(); const lastFeelOn = fd[fd.length - 1] || '';
+    return { t: t, start: start, n: n, span: span, yes: yes, yes21: yes21, off: off, total: total, lastFeelOn: lastFeelOn, lastFeel: lastFeelOn ? H.feel[lastFeelOn] : '' };
+  }
+  const hCount = st => (st.n < 14 ? st.yes + ' of ' + st.n + ' day' + (st.n === 1 ? '' : 's') + ' so far' : st.yes + ' of the last 14 days');
+  function hDots(H, st) {
+    let h = '';
+    for (let i = st.span - 1; i >= 0; i--) h += '<i class="' + (hSay(H, addDays(st.t, -i)) || 'blank') + (i === 0 ? ' tod' : '') + '"></i>';
+    return '<div class="hdots" role="img" aria-label="' + esc(hCount(st)) + '">' + h + '</div>';
+  }
+  /* Four weeks, a square a day. Tapping a square fixes that day: done, not done, or back to blank. */
+  function hCal(H, st) {
+    const first = addDays(st.t, -27); let h = '';
+    for (let i = 0; i < 7; i++) h += '<span>' + esc(fDow.format(asDate(addDays(first, i))).slice(0, 2)) + '</span>';
+    for (let i = 0; i < 28; i++) {
+      const d = addDays(first, i); const v = hSay(H, d); const off = d < st.start;
+      h += '<button type="button" class="' + v + (d === st.t ? ' tod' : '') + '"' + (off ? ' disabled' : ' data-act="hdot" data-id="' + esc(H.id) + '" data-day="' + d + '"') +
+        ' aria-label="' + esc(fShort.format(asDate(d)) + ': ' + (off ? 'before you started' : v === 'yes' ? 'done' : v === 'no' ? 'not done' : 'no answer')) + '">' + Number(d.slice(8)) + '</button>';
+    }
+    return '<div class="hcal">' + h + '</div>';
+  }
+  /* Today's question, yesterday's if it was left blank, and whatever follows from the answers. */
+  function habitAsk(H, st) {
+    const id = esc(H.id); const t = st.t; const y = addDays(t, -1); const today = hSay(H, t);
+    const btn = (label, val, d, cls) => '<button class="btn small' + (cls || '') + '" type="button" data-act="hday" data-id="' + id + '" data-val="' + val + '" data-day="' + d + '">' + label + '</button>';
+    const redo = label => ' <button class="link inline" type="button" data-act="hday" data-id="' + id + '" data-val="" data-day="' + t + '">' + label + '</button>';
+    let h = ''; const g = hSug(H);
+    if (g) {
+      h += '<div class="soft"><p>' + esc(g.why || 'A suggestion from Claude, from how the last days went:') + '</p><p class="plan">' + planHtml({ anchor: g.anchor || H.anchor, tiny: g.tiny || H.tiny, title: H.title }) + '</p>' +
+        '<div class="row"><button class="btn small primary" type="button" data-act="hsugyes" data-id="' + id + '">Use that</button><button class="btn small quiet" type="button" data-act="hsugno" data-id="' + id + '">Keep mine</button></div></div>';
+    } else if (H.note) h += '<p class="soft">' + esc(H.note) + '</p>';
+    if (!today) h += '<div class="row">' + btn('Done today', 'yes', t, ' primary') + btn('Not today', 'no', t) + '</div>';
+    else if (today === 'yes') {
+      h += '<p><b>Done today.</b>' + (st.total === 1 ? ' That is the first one, and the early days do the most.' : '') + redo('undo') + '</p>' + (H.after ? '<p class="meta">Now: ' + esc(trimEnd(H.after)) + '.</p>' : '');
+    } else {
+      const lab = (MISSES.find(m => m[0] === (H.miss && H.miss[t])) || [])[1];
+      h += '<p class="soft">Not today. One missed day doesn’t set a habit back; the research is clear on that. Tomorrow is the one that counts.' + redo('change') + '</p>' +
+        (lab ? '<p class="meta">In the way: ' + esc(lab.toLowerCase()) + '. Noted.</p>' :
+          '<div class="seg"><span class="meta">What got in the way? One tap, and only if you feel like it.</span><div class="chips">' + MISSES.map(m => '<button class="chip" type="button" data-act="hmiss" data-id="' + id + '" data-val="' + m[0] + '">' + m[1] + '</button>').join('') + '</div></div>');
+    }
+    if (st.n > 1 && !hSay(H, y)) h += '<div class="seg"><span class="meta">And yesterday?</span><div class="row">' + btn('Yes, did it', 'yes', y) + btn('No', 'no', y) + '</div></div>';
+    const adjusted = validYMD(H.adjustOn) && dayDiff(t, H.adjustOn) < 3;
+    if (st.off >= 2 && today !== 'yes' && !adjusted && !g) {
+      h += '<div class="soft"><p>Two days off in a row. That usually means the step is too big or the cue is in the wrong spot. It says nothing about you.</p>' +
+        '<div class="row"><button class="btn small" type="button" data-act="hsmaller" data-id="' + id + '">Make it smaller</button><button class="btn small" type="button" data-act="hmove" data-id="' + id + '">Move it</button><button class="btn small quiet" type="button" data-act="hfine" data-id="' + id + '">It’s fine as it is</button></div></div>';
+    }
+    if (today && st.n >= 7 && (!st.lastFeelOn || dayDiff(t, st.lastFeelOn) >= 7)) {
+      h += '<div class="seg"><span class="meta">Once a week: how automatic is it by now?</span><div class="row">' + FEELS.map(f => '<button class="btn small" type="button" data-act="hfeel" data-id="' + id + '" data-val="' + f[0] + '">' + f[1] + '</button>').join('') + '</div></div>';
+    }
+    const asked = validYMD(H.keepAskedOn) && dayDiff(t, H.keepAskedOn) < 7;
+    if (!asked && ((st.n >= 21 && st.yes21 >= 17 && st.lastFeel === 'auto') || (st.n >= 66 && st.yes21 >= 15))) {
+      h += '<div class="soft"><p><b>This looks like a habit now.</b> ' + st.yes21 + ' of the last 21 days' + (st.lastFeel === 'auto' ? ', and you said you just do it' : '') + '.</p>' +
+        '<div class="row"><button class="btn small primary" type="button" data-act="hkeep" data-id="' + id + '">Call it built</button><button class="btn small quiet" type="button" data-act="hwait" data-id="' + id + '">Keep building</button></div></div>';
+    }
+    return h;
+  }
+  /* The card near the top of Today. */
+  function habitCard() {
+    if (!S.gotHabits || !S.db) return '';
+    const H = building();
+    if (!H) {
+      if (hQuiet()) return '';
+      const n = habitList().filter(x => x.status === 'idea').length; const kept = habitList().some(x => x.status === 'kept');
+      return '<section class="habit" aria-label="One habit at a time"><div class="eyebrow">One habit at a time</div>' +
+        '<p>' + (kept ? 'Nothing in the making right now. Ready for the next one?' : 'Build one small habit, tied to something you already do. The page asks once a day whether it happened.') + (n ? ' ' + n + (n === 1 ? ' is' : ' are') + ' ready to pick from.' : '') + '</p>' +
+        '<div class="row"><button class="btn small primary" type="button" data-act="hgo">Pick one</button><button class="btn small quiet" type="button" data-act="hquiet">Not now</button></div></section>';
+    }
+    const st = hStats(H);
+    return '<section class="habit" aria-label="Your one habit"><div class="eyebrow">One habit · day ' + st.n + '</div><p class="plan">' + planHtml(H) + '</p>' +
+      habitAsk(H, st) + hDots(H, st) + '<p class="meta">' + hCount(st) + ' · <button class="link inline" type="button" data-act="hgo">more</button></p></section>';
+  }
+  /* The reasons, in plain words. These are the general ones; the owner's own notes may carry a fuller set
+     (meta/config.habitWhy, a list of { b, t }, and habitWhyNote), written for him by the run. */
+  const HWHY_DEF = [
+    { b: 'Tied to something you already do.', t: 'Plans shaped like \u201cAfter this, I will do that\u201d gave a medium-to-large lift in follow-through across 94 studies and more than 8,000 people. A cue that happens anyway does the remembering for you.' },
+    { b: 'Small on purpose.', t: 'What builds a habit is repeating it in the same spot, not how big it is. The two-minute version counts in full.' },
+    { b: 'A missed day is only a missed day.', t: 'In the best-known study (96 people, twelve weeks), missing one day made no real difference to how the habit formed. People who were very inconsistent didn\u2019t get there. Hence: never miss twice.' },
+    { b: 'It takes as long as it takes.', t: 'In that study it took about two months on average before the thing ran by itself, and the range was 18 days to 254. The three-week rule is a myth. The steepest gains come in the first weeks.' },
+    { b: 'One question a day.', t: 'Across 138 experiments, people who kept a record of their progress got further, and more so when the record was written down where they could see it.' },
+    { b: 'Something good right after.', t: 'A small reward straight after the habit does more to keep it going than a big one far off.' }];
+  const HWHY_NOTE = 'Sources: Lally and colleagues, 2010; Gollwitzer and Sheeran, 2006; Keller and colleagues, 2021; Harkin and colleagues, 2016; Singh and colleagues, 2024; Woolley and Fishbach, 2017.';
+  function hWhyHtml() {
+    const own = cfgList('habitWhy').filter(x => x && x.t); const list = own.length ? own : HWHY_DEF;
+    return '<div class="hwhy">' + list.map(x => '<p>' + (x.b ? '<b>' + esc(x.b) + '</b> ' : '') + esc(x.t) + '</p>').join('') + '<p class="meta">' + esc((own.length && S.config.habitWhyNote) || HWHY_NOTE) + '</p></div>';
+  }
+  function habitEditor() {
+    const E = S.hEdit; const H = E.id ? S.habits[E.id] : null; const live = !!(H && H.status === 'building');
+    const inp = (key, id, label, ph, max) => '<label>' + label + '<input class="field" id="' + id + '" data-h="' + key + '" type="text" maxlength="' + max + '" placeholder="' + ph + '" value="' + esc(E[key] || '') + '" autocomplete="off"></label>';
+    return '<div class="card hedit">' +
+      inp('title', 'hTitle', 'The habit, in a few words', 'A short walk', 120) +
+      inp('anchor', 'hAnchor', 'After… (something that already happens every day)', 'I sit down at my desk', 160) +
+      '<div class="chips" aria-label="Things already in your day">' + anchorChips().map(a => '<button class="chip" type="button" data-act="hanchor" data-id="' + esc(a.t) + '" data-val="' + esc(a.w || '') + '">' + esc(a.t) + '</button>').join('') + '</div>' +
+      inp('tiny', 'hTiny', 'I will… (the two-minute version; it counts in full)', 'put my shoes on and walk to the mailbox', 200) +
+      '<div class="seg"><span class="meta">Which part of the day is that?</span><div class="row">' + WHENS.map(w => '<button class="btn small" type="button" data-act="hwhen" data-id="' + w[0] + '" aria-pressed="' + (E.when === w[0] ? 'true' : 'false') + '">' + w[1] + '</button>').join('') + '</div></div>' +
+      inp('after', 'hAfter', 'Something good right after (optional)', 'the first coffee', 120) +
+      '<div class="row"><button class="btn primary" type="button" data-act="hsave">' + (live ? 'Save' : 'Start it') + '</button><button class="btn quiet" type="button" data-act="hcancel">Cancel</button></div>' +
+      (live ? '' : '<p class="meta">Starting one pauses any other habit in the making. One at a time.</p>') + '</div>';
+  }
+  /* The whole of it, under Check in: the habit in the making, the ones waiting, the ones built, and the reasons. */
+  function habitSection() {
+    if (!S.gotHabits) return '';
+    const H = building(); const all = habitList();
+    const ideas = all.filter(x => x.status === 'idea').sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || String(a.id).localeCompare(String(b.id)));
+    const paused = all.filter(x => x.status === 'paused');
+    const kept = all.filter(x => x.status === 'kept').sort((a, b) => String(a.keptOn || '').localeCompare(String(b.keptOn || '')));
+    let h = '<section class="sec" id="habitSec" aria-labelledby="ciH"><h2 class="h" id="ciH">One habit at a time</h2>';
+    if (S.hEdit) h += habitEditor();
+    else if (H) {
+      const st = hStats(H); const id = esc(H.id);
+      const feels = Object.keys(H.feel || {}).filter(d => validYMD(d) && H.feel[d] && d >= st.start).sort().slice(-4).map(d => esc(fShort.format(asDate(d))) + ', “' + esc(String((FEELS.find(f => f[0] === H.feel[d]) || [])[1] || '')) + '”').join(' · ');
+      h += '<div class="habit"><div class="eyebrow">In the making · day ' + st.n + '</div>' + (H.title ? '<h3>' + esc(H.title) + '</h3>' : '') + '<p class="plan">' + planHtml(H) + '</p>' +
+        (H.why ? '<p class="meta">' + esc(H.why) + '</p>' : '') + habitAsk(H, st) + hCal(H, st) +
+        '<p class="meta">' + st.total + ' day' + (st.total === 1 ? '' : 's') + ' done since you started on ' + esc(fShort.format(asDate(st.start))) + '. Tap a day to fix it: done, not done, or blank. A blank is only a blank.</p>' +
+        (feels ? '<p class="meta">How automatic it has felt: ' + feels + '.</p>' : '') +
+        '<div class="row"><button class="link" type="button" data-act="hedit" data-id="' + id + '">Change the words</button><button class="link" type="button" data-act="hpause" data-id="' + id + '">Pause it</button>' +
+        '<button class="link" type="button" data-act="hdrop" data-id="' + id + '">' + (S.hArm === 'drop:' + H.id ? 'Tap again to let it go' : 'Let it go') + '</button></div></div>';
+    } else {
+      h += '<p>' + (kept.length ? 'Ready for the next one? ' : '') + 'Pick one habit, tie it to something you already do, and make it small enough to do on a bad day. The page asks once a day whether it happened.</p>';
+    }
+    if (!S.hEdit) {
+      const pick = ideas.concat(paused);
+      if (pick.length) {
+        h += '<div class="card">' + (H ? '<p class="meta">Waiting their turn, for when this one is built or set down:</p>' : '') + '<div>' + pick.map(x => {
+          const xid = esc(x.id); const arm = S.hArm === 'start:' + x.id;
+          return '<div class="hidea"><h3>' + esc(x.title || 'A habit') + (x.status === 'paused' ? ' <span class="meta">paused</span>' : '') + '</h3><p class="plan">' + planHtml(x) + '</p>' + (x.why ? '<p class="meta">' + esc(x.why) + '</p>' : '') +
+            '<div class="row"><button class="btn small' + (H ? '' : ' primary') + '" type="button" data-act="hstart" data-id="' + xid + '">' + (arm ? 'Tap again: it pauses the current one' : x.status === 'paused' ? 'Pick it back up' : 'Start this one') + '</button>' +
+            '<button class="link" type="button" data-act="hedit" data-id="' + xid + '">Change the words first</button></div></div>';
+        }).join('') + '</div></div>';
+      }
+      h += '<div class="row"><button class="btn small" type="button" data-act="hedit" data-id="">Write your own</button></div>';
+    }
+    if (kept.length) h += '<div><p class="meta">Habits you’ve built:</p><ul class="wins">' + kept.map(x => '<li>' + esc(x.title || cleanTiny(x.tiny)) + (validYMD(x.keptOn) ? ' <span class="meta">since ' + esc(fShort.format(asDate(x.keptOn))) + '</span>' : '') + '</li>').join('') + '</ul></div>';
+    return h + '<div class="row"><button class="link" type="button" data-act="hwhy" aria-expanded="' + (S.hWhy ? 'true' : 'false') + '">' + (S.hWhy ? 'Hide the reasons' : 'Why it works this way') + '</button></div>' + (S.hWhy ? hWhyHtml() : '') + '</section>';
   }
 
   /* ---------- the hour ----------
@@ -268,7 +429,7 @@
     } else {
       const landed = items.filter(isDone).length + loopList().filter(x => x.status === 'done' && Date.parse(x.doneAt || '') && fYMD.format(new Date(x.doneAt)) === todayYMD() && !items.some(it => it.loopId === x.id)).length;
       eyebrow = 'The day is done';
-      body = '<p>' + (landed ? landed + ' thing' + (landed === 1 ? '' : 's') + ' landed today.' : 'Nothing more is owed tonight. What didn\'t happen keeps.') + '</p>' + close + '<p class="meta">Tomorrow\'s page comes about 9:20.</p>';
+      body = '<p>' + (landed ? landed + ' thing' + (landed === 1 ? '' : 's') + ' landed today.' : 'Nothing more is owed tonight. What didn\'t happen keeps.') + '</p>' + close + '<p class="meta">Tomorrow\'s page is ready before 9.</p>';
     }
     return '<section class="now" aria-label="Right now"><div class="eyebrow">' + eyebrow + '</div>' + body + '</section>';
   }
@@ -388,7 +549,7 @@
     const d = day(); const top = $('todayTop');
     const note = stateNotice();
     if (!d) {
-      paint(top, note || (S.got ? '<p class="notice">No edition has been written yet. The first one arrives in the morning, about 9:20.</p>' : '<p class="skeleton">Reaching your notes…</p>'));
+      paint(top, note || (S.got ? '<p class="notice">No edition has been written yet. The first one arrives in the morning, before 9.</p>' : '<p class="skeleton">Reaching your notes…</p>'));
       paint($('todayFeeds'), ''); paint($('todayComing'), ''); paint($('todayWins'), ''); paint($('todayFoot'), ''); renderCaps(); return;
     }
     const isToday = d.date === todayYMD();
@@ -397,9 +558,10 @@
       (S.days.length > 1 ? '<div class="ed-nav">' +
       '<button type="button" data-act="older"' + (S.dayIdx >= S.days.length - 1 ? ' disabled' : '') + ' aria-label="Earlier edition">‹ Earlier</button>' +
       '<button type="button" data-act="newer"' + (S.dayIdx <= 0 ? ' disabled' : '') + ' aria-label="Later edition">Later ›</button></div>' : '') + '</div>';
-    if (!isToday && S.dayIdx === 0) h += '<p class="notice">This is ' + esc(fWeekday.format(asDate(d.date))) + '\'s edition. Today\'s is written about 9:20 in the morning.</p>';
+    if (!isToday && S.dayIdx === 0) h += '<p class="notice">This is ' + esc(fWeekday.format(asDate(d.date))) + '\'s edition. Today\'s is ready before 9 in the morning.</p>';
     const live0 = S.dayIdx === 0 && !!S.db;
     if (live0 && isToday) h += nowCard(d);
+    if (live0) h += habitCard();
     if (live0) { const one = oneChoice(d, true).o; h += backBlock(true, one && one.loopId); }
     h += '<p class="lede">' + esc(d.nameTheDay || '') + '</p>';
     if (d.weather || S.tts) h += '<div class="row">' + (d.weather ? '<p class="weather">' + esc(d.weather) + '</p>' : '') + (S.tts ? '<button class="link" type="button" data-act="speak">' + (S.speaking ? 'Stop reading' : 'Read it to me') + '</button>' : '') + '</div>';
@@ -463,7 +625,7 @@
     const src = d.sources || {};
     const st = S.status || {};
     paint($('todayFoot'), '<p class="meta">' + (Array.isArray(src.reached) && src.reached.length ? 'Read for this edition: ' + esc(src.reached.join(', ')) + '. ' : '') +
-      (Array.isArray(src.missed) && src.missed.length ? 'Couldn\'t reach: ' + esc(src.missed.join(', ')) + '. ' : '') + esc(st.next || 'Next edition: tomorrow, about 9:20 AM.') +
+      (Array.isArray(src.missed) && src.missed.length ? 'Couldn\'t reach: ' + esc(src.missed.join(', ')) + '. ' : '') + esc(st.next || 'Next edition: tomorrow, before 9:00 AM.') +
       (window.LandingApp && window.LandingApp.status().waiting ? ' ' + window.LandingApp.status().waiting + ' of your taps are waiting for a signal.' : '') + '</p>');
   }
 
@@ -482,7 +644,7 @@
     const st = loopSteps(L);
     if (st.length && L.status !== 'done') bits.push(st.filter(x => L.stepTicks && L.stepTicks[x.id]).length + ' of ' + st.length + ' steps');
     const hs = hand(L) ? String(hand(L).status || '') : '';
-    if (hs === 'asked') bits.push('with Claude'); else if (handBack(L)) bits.push('<b>back from Claude</b>');
+    if (hs === 'asked') bits.push('with Claude'); else if (handBack(L)) bits.push('<b>back from Claude</b>'); else if (L.offer && L.status === 'open') bits.push('Claude can take this');
     return '<div class="loop' + (L.status === 'done' ? ' done' : '') + '"><div class="loop-top">' + dot(L.area) +
       '<button class="loop-title" type="button" data-act="toggle" data-id="' + esc(L.id) + '" aria-expanded="' + open + '">' + esc(L.title) + '</button></div>' +
       '<div class="loop-body"><p class="loop-meta">' + bits.join(' · ') + '</p>' +
@@ -564,7 +726,7 @@
       const st = A.status();
       const when = Date.parse(st.baseAt || '') ? fDayTime.format(new Date(st.baseAt)) : '';
       return '<section class="sec" aria-labelledby="apH"><h2 class="h" id="apH">This device</h2><div class="card">' +
-        '<p>' + (st.linked ? 'Linked. ' + (when ? 'The newest edition here arrived ' + esc(when) + '.' : 'No edition has arrived yet. The next one comes about 9:20 in the morning.') : 'Not linked yet.') +
+        '<p>' + (st.linked ? 'Linked. ' + (when ? 'The newest edition here arrived ' + esc(when) + '.' : 'No edition has arrived yet. The next one comes before 9 in the morning.') : 'Not linked yet.') +
         (st.waiting ? ' ' + st.waiting + ' tap' + (st.waiting === 1 ? ' is' : 's are') + ' waiting to go out. They\'re saved here and will send by themselves.' : st.linked ? ' Everything you\'ve tapped has been sent.' : '') + '</p>' +
         (st.err ? '<p class="notice bad">' + esc(st.err) + '</p>' : '') +
         '<p class="meta">Your taps are saved on this device first, then sent sealed. The page in Claude catches up each morning.</p>' +
@@ -599,9 +761,10 @@
     }).join('') + '</div>' +
       appBlock() +
       '<section class="sec how"><h2 class="h">How this page works</h2><div>' +
-      '<p>Each morning about 9:20 a new edition is written from your notes, your calendar, your recordings, your money and piano pages, and your agents\' headlines. It picks one thing you\'ve been putting off and makes the first step small. A second, shorter pass runs after lunch, about 1:15. In between, the top of Today follows the clock.</p>' +
+      '<p>Each morning a new edition is written from your notes, your calendar, your recordings, your money and piano pages, and your agents\' headlines. It starts a little after 8 and is ready before 9. It picks one thing you\'ve been putting off and makes the first step small. A second, shorter pass runs after lunch, about 1:15. In between, the top of Today follows the clock.</p>' +
       '<p>Every tap here is saved right away and read at the next pass: I did it, Not today, Let it go, the steps and lists you tick, and anything you type or say under Tell The Landing. Nothing here sends email or contacts anyone.</p>' +
       '<p>Hand it to Claude does what it says. The next pass does the part Claude can do alone (research, a draft, a comparison, a call sheet) and brings it back here for you to read. Drafts only: nothing gets sent, bought or signed.</p>' +
+      '<p>One habit at a time lives under Check in, with its one question near the top of Today. You choose it and tie it to something already in your day; the page asks once a day whether it happened; a day with no answer is only a blank. When it runs by itself you call it built, it joins your daily rhythm, and the next one starts.</p>' +
       '<p>Check in is where the page learns you: a few one-tap questions at a time, each saying why it asks. Your answers change what the next editions pick, when they suggest it and how they word it. What the page has taken from you is listed there too, and you can correct any line.</p>' +
       '<p>Only you can open this page.</p></div></section>');
   }
@@ -717,6 +880,7 @@
     if (!S.db || (!S.got && !S.gotAsks)) { paint(el, note || '<p class="skeleton">Reaching your notes…</p>'); return; }
     let h = note + '<p class="meta">Everything here is one tap. What you tap shapes tomorrow\'s page, and the ones after it.</p>';
     h += '<section class="sec" aria-labelledby="ciN"><h2 class="h" id="ciN">Right now</h2>' + checkStrip(false) + '</section>';
+    h += habitSection();
     const oa = openAsks(); const shown = S.askAll ? oa : oa.slice(0, 3);
     h += '<section class="sec" aria-labelledby="ciQ"><h2 class="h" id="ciQ">Questions for you' + (oa.length ? ' · ' + oa.length : '') + '</h2>' +
       (oa.length ? shown.map((A, i) => askCard(A, (i + 1) + ' of ' + oa.length)).join('') + (oa.length > 3 ? '<div class="row"><button class="link" type="button" data-act="askall">' + (S.askAll ? 'Show three at a time' : 'Show ' + (oa.length - shown.length) + ' more') + '</button></div>' : '')
@@ -774,6 +938,46 @@
     S.loops[id] = Object.assign({}, L, extra || {}, { handoff: Object.assign({}, hand(L) || {}, fields) }, stamp); schedule();
     wq('loops/' + id, () => S.db.doc('loops/' + id).update(Object.assign({}, extra || {}, { handoff: fields }, stamp))).catch(e => { S.loops[id] = L; schedule(); saveFail(e); });
     return true;
+  }
+  /* Change a habit: shown at once, saved behind it. The day-by-day maps are sent one entry at a time, so a tap on the
+     phone and a tap on the computer never overwrite each other. */
+  const HMAPS = ['days', 'miss', 'feel'];
+  function saveHabit(id, patch, msg, undoable) {
+    const H = S.habits[id]; if (!H || !S.db) return null;
+    const stamp = { updatedAt: new Date().toISOString(), by: 'page' };
+    const next = Object.assign({}, H, patch, stamp); const prev = {};
+    Object.keys(patch).forEach(k => {
+      if (HMAPS.indexOf(k) < 0) { prev[k] = H[k] === undefined ? '' : H[k]; return; }
+      next[k] = Object.assign({}, H[k] || {}, patch[k]); prev[k] = {};
+      Object.keys(patch[k]).forEach(d => { prev[k][d] = (H[k] && H[k][d]) || ''; });
+    });
+    S.habits[id] = next; schedule();
+    wq('habits/' + id, () => S.db.doc('habits/' + id).update(Object.assign({}, patch, stamp))).catch(e => { S.habits[id] = H; schedule(); saveFail(e); });
+    const undo = () => { if (S.habits[id]) saveHabit(id, prev); };
+    if (msg) toast(msg, undoable ? undo : null);
+    return undo;
+  }
+  /* One day's answer: 'yes', 'no', or '' for a blank. A day that is no longer "not done" loses its reason. */
+  function habitDay(H, d, v) {
+    const patch = { days: { [d]: v } }; if (v !== 'no' && H.miss && H.miss[d]) patch.miss = { [d]: '' };
+    return saveHabit(H.id, patch);
+  }
+  /* A habit that is also one of the daily rhythm items keeps the two in step: "done" here ticks it on today's list. */
+  function habitToRhythm(H, on) {
+    const d = latest(); if (!on || !H.rhythmId || !d || d.date !== todayYMD()) return;
+    const it = (d.today || []).find(x => x.id === H.rhythmId && !x.loopId);
+    if (it && !(d.ticks && d.ticks[it.id])) tickDay(d, it.id, new Date().toISOString());
+  }
+  function openHabitEditor(id, focus) {
+    const H = id ? S.habits[id] : null;
+    ['hTitle', 'hAnchor', 'hTiny', 'hAfter'].forEach(k => { const el = $(k); if (el) el.value = ''; });
+    S.hEdit = { id: H ? H.id : '', title: H ? String(H.title || '') : '', anchor: H ? cleanAnchor(H.anchor) : '', tiny: H ? cleanTiny(H.tiny) : '', after: H ? trimEnd(H.after) : '', when: H ? String(H.when || '') : '' };
+    S.hArm = null;
+    if (S.view !== 'checkin') go('checkin'); else render();
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const sec = $('habitSec'); if (sec) sec.scrollIntoView({ block: 'start' });
+      const f = focus && $(focus); if (f) { try { f.focus({ preventScroll: true }); } catch (e) { /* focus is a nicety */ } }
+    }));
   }
   const fieldText = btn => { const box = btn && btn.closest('.linkbox'); const inp = box && box.querySelector('input'); return inp ? String(inp.value || '').trim().slice(0, 600) : ''; };
   function addInbox(doc) {
@@ -863,6 +1067,79 @@
       const v = fieldText(btn); if (!v) { toast('Say what should change first.'); return; }
       if (patchHand(id, { status: 'asked', askedAt: new Date().toISOString(), changes: v })) { delete S.handFix[id]; toast('Sent back to Claude.'); }
     },
+    hgo() { go('checkin'); requestAnimationFrame(() => requestAnimationFrame(() => { const el = $('habitSec'); if (el) el.scrollIntoView({ block: 'start' }); })); },
+    hquiet() { try { localStorage.setItem('tl.hquiet', todayYMD()); } catch (e) { /* it shows again next time */ } render(); },
+    hwhy() { S.hWhy = !S.hWhy; schedule(); },
+    hday(id, b) {
+      const H = S.habits[id]; if (!H || !b || !S.db) return;
+      const v = b.dataset.val === 'yes' || b.dataset.val === 'no' ? b.dataset.val : ''; const t = todayYMD(); const d = validYMD(b.dataset.day) ? b.dataset.day : t;
+      if (d > t) return;
+      habitDay(H, d, v);
+      if (d === t) habitToRhythm(H, v === 'yes');
+      if (v === 'yes') toast(d === t ? 'Done for today.' : 'Noted.');
+    },
+    hdot(id, b) {
+      const H = S.habits[id]; const d = b && b.dataset.day; if (!H || !S.db || !validYMD(d) || d > todayYMD()) return;
+      const cur = hSay(H, d); const v = cur === '' ? 'yes' : cur === 'yes' ? 'no' : '';
+      habitDay(H, d, v);
+      if (d === todayYMD()) habitToRhythm(H, v === 'yes');
+    },
+    hmiss(id, b) { const v = (b && b.dataset.val) || ''; if (MISSES.some(m => m[0] === v)) saveHabit(id, { miss: { [todayYMD()]: v } }, 'Noted.', true); },
+    hfeel(id, b) { const v = (b && b.dataset.val) || ''; if (FEELS.some(f => f[0] === v)) saveHabit(id, { feel: { [todayYMD()]: v } }, 'Noted.', true); },
+    hfine(id) { saveHabit(id, { adjustOn: todayYMD() }, 'Kept as it is.'); },
+    hsmaller(id) { openHabitEditor(id, 'hTiny'); },
+    hmove(id) { openHabitEditor(id, 'hAnchor'); },
+    hedit(id) { openHabitEditor(id, id ? '' : 'hTitle'); },
+    hcancel() { S.hEdit = null; schedule(); },
+    hwhen(v) { if (S.hEdit) { S.hEdit.when = S.hEdit.when === v ? '' : v; schedule(); } },
+    hanchor(text, b) {
+      if (!S.hEdit || !text) return;
+      S.hEdit.anchor = text; const w = (b && b.dataset.val) || ''; if (w) S.hEdit.when = w;
+      const i = $('hAnchor'); if (i) i.value = text;
+      schedule();
+    },
+    hsave() {
+      const E = S.hEdit; if (!E || !S.db) return;
+      [['title', 'hTitle'], ['anchor', 'hAnchor'], ['tiny', 'hTiny'], ['after', 'hAfter']].forEach(p => { const el = $(p[1]); if (el) E[p[0]] = el.value; });
+      const tiny = cleanTiny(E.tiny).slice(0, 200), anchor = cleanAnchor(E.anchor).slice(0, 160), after = trimEnd(E.after).slice(0, 120);
+      const title = (trimEnd(E.title) || tiny).slice(0, 120);
+      if (!title) { toast('Say what the habit is first.'); const f = $('hTiny'); if (f) f.focus(); return; }
+      if (!anchor) { toast('Tie it to something that already happens: “After…”'); const f = $('hAnchor'); if (f) f.focus(); return; }
+      const t = todayYMD(); const H = E.id ? S.habits[E.id] : null;
+      const words = { title: title, anchor: anchor, tiny: tiny || title, after: after, when: E.when || '' };
+      if (H && H.status === 'building') saveHabit(H.id, Object.assign(words, { adjustOn: t }), 'Saved.');
+      else {
+        habitList().filter(x => x.status === 'building').forEach(x => saveHabit(x.id, { status: 'paused', pausedOn: t }));
+        if (H) saveHabit(H.id, Object.assign(words, { status: 'building', startedOn: t }), 'Started. The page asks once a day.');
+        else {
+          const id = (title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'habit') + '-' + Math.random().toString(36).slice(2, 6);
+          const doc = Object.assign({ area: '', why: '', status: 'building', startedOn: t, days: {}, updatedAt: new Date().toISOString(), by: 'page' }, words);
+          S.habits[id] = Object.assign({ id: id }, doc);
+          wq('habits/' + id, () => S.db.doc('habits/' + id).set(doc)).then(() => toast('Started. The page asks once a day.')).catch(e => { delete S.habits[id]; schedule(); saveFail(e); });
+        }
+      }
+      S.hEdit = null; schedule();
+    },
+    hstart(id) {
+      const H = S.habits[id]; if (!H || !S.db) return; const B = building(); const t = todayYMD();
+      if (B && B.id !== id && S.hArm !== 'start:' + id) { S.hArm = 'start:' + id; schedule(); setTimeout(() => { if (S.hArm === 'start:' + id) { S.hArm = null; schedule(); } }, 6000); return; }
+      S.hArm = null;
+      if (B && B.id !== id) saveHabit(B.id, { status: 'paused', pausedOn: t });
+      saveHabit(id, { status: 'building', startedOn: t }, 'Started. The page asks once a day.');
+    },
+    hpause(id) { saveHabit(id, { status: 'paused', pausedOn: todayYMD() }, 'Paused. Its record is kept.', true); },
+    hdrop(id) {
+      if (S.hArm !== 'drop:' + id) { S.hArm = 'drop:' + id; schedule(); setTimeout(() => { if (S.hArm === 'drop:' + id) { S.hArm = null; schedule(); } }, 5000); return; }
+      S.hArm = null; saveHabit(id, { status: 'dropped', droppedOn: todayYMD() }, 'Let go.', true);
+    },
+    hkeep(id) { if (saveHabit(id, { status: 'kept', keptOn: todayYMD() }, 'Built. It stays in your days from here on.', true)) ACT.hgo(); },
+    hwait(id) { saveHabit(id, { keepAskedOn: todayYMD() }, 'Fine. It keeps building.'); },
+    hsugyes(id) {
+      const H = S.habits[id]; const g = hSug(H); if (!g) return;
+      const p = { suggestAnswered: g.on, adjustOn: todayYMD() }; if (g.anchor) p.anchor = cleanAnchor(g.anchor); if (g.tiny) p.tiny = cleanTiny(g.tiny);
+      saveHabit(id, p, 'Changed.', true);
+    },
+    hsugno(id) { const g = hSug(S.habits[id]); if (g) saveHabit(id, { suggestAnswered: g.on }, 'Kept as it was.'); },
     done(id) { S.dropArm = null; setLoop(id, { status: 'done', doneAt: new Date().toISOString(), doneVia: 'page' }, landedMsg(), true); },
     still(id) { setLoop(id, { status: 'open' }, 'Kept on the list.', true); },
     pass(id) { const L = S.loops[id]; if (!L) return; setLoop(id, { snoozeUntil: addDays(todayYMD(), 1), passes: (Number(L.passes) || 0) + 1, passedOn: todayYMD() }, 'Set down for today.', true); },
@@ -894,7 +1171,9 @@
       const d = day(); if (!d || !S.db) return;
       const it = (d.today || []).find(x => x.id === itemId); if (!it) return;
       if (it.loopId && S.loops[it.loopId]) { const L = S.loops[it.loopId]; if (L.status === 'done') ACT.reopen(L.id); else ACT.done(L.id); return; }
-      tickDay(d, itemId, d.ticks && d.ticks[itemId] ? false : new Date().toISOString());
+      const was = !!(d.ticks && d.ticks[itemId]);
+      tickDay(d, itemId, was ? false : new Date().toISOString());
+      const B = building(); if (!was && B && B.rhythmId === itemId && d.date === todayYMD() && hSay(B, d.date) !== 'yes') habitDay(B, d.date, 'yes');
     },
     wtick(itemId) {
       if (!S.db || !S.weekId) return;
@@ -959,7 +1238,11 @@
       if (sys != null) { doc.sys = Math.round(sys); doc.dia = Math.round(dia); }
       if (pulse != null) doc.pulse = Math.round(pulse);
       if (wt != null) doc.weight = Math.round(wt * 10) / 10;
-      S.db.collection('readings').add(doc).then(() => { ['rSys', 'rDia', 'rPulse', 'rWt'].forEach(i => { if ($(i)) $(i).value = ''; }); toast('Saved.'); tickReadingItem(); schedule(); }).catch(saveFail);
+      S.db.collection('readings').add(doc).then(() => {
+        ['rSys', 'rDia', 'rPulse', 'rWt'].forEach(i => { if ($(i)) $(i).value = ''; }); toast('Saved.'); tickReadingItem();
+        const B = building(); if (B && B.reading && hSay(B, todayYMD()) !== 'yes') habitDay(B, todayYMD(), 'yes');   // a habit that is "take a reading" is done by taking one
+        schedule();
+      }).catch(saveFail);
     },
     delreading(id) {
       const r = S.readings.find(x => x.id === id); if (!r || !S.db) return;
@@ -1017,10 +1300,13 @@
   document.addEventListener('keydown', ev => {
     if (ev.key !== 'Enter' || !ev.target || ev.target.tagName !== 'INPUT') return;
     const lb = ev.target.closest('.linkbox'); if (lb) { const go = lb.querySelector('button[data-act]'); if (go) { ev.preventDefault(); go.click(); } return; }
+    const he = ev.target.closest('.hedit'); if (he) { const go = he.querySelector('button[data-act="hsave"]'); if (go) { ev.preventDefault(); go.click(); } return; }
     const scope = ev.target.closest('.ask, .know, .add') || ev.target.closest('section'); if (!scope) return;
     const btn = scope.querySelector('button[data-act="anstext"], button[data-act="ansmulti"], button[data-act="fixsave"], button[data-act="fbsave"], button[data-act="addloop"], button[data-act="addreading"]');
     if (btn) { ev.preventDefault(); btn.click(); }
   });
+  /* The habit editor keeps what is typed in S.hEdit, so a repaint never loses or resurrects a word. */
+  document.addEventListener('input', ev => { const k = ev.target && ev.target.dataset && ev.target.dataset.h; if (k && S.hEdit) S.hEdit[k] = ev.target.value; });
   window.addEventListener('hashchange', () => { const v = location.hash.replace('#', ''); if (v && v !== S.view && isView(v)) { S.view = v; render(); } });
 
   /* ---------- Claude extras: help starting, reading aloud, speaking a note ---------- */
@@ -1051,6 +1337,7 @@
     const parts = [d.long || '', d.nameTheDay || '', d.weather || ''];
     const one = d.oneThing && d.oneThing.title ? oneChoice(d, S.dayIdx === 0).o : null;
     if (one) parts.push('The one thing: ' + one.title + '. ' + (one.why || '') + ' First two minutes: ' + (one.firstStep || ''));
+    const B = S.dayIdx === 0 ? building() : null; if (B) parts.push('Your one habit: ' + planText(B));
     (d.today || []).forEach(it => parts.push((it.time ? it.time + ': ' : '') + it.title + '. ' + (it.note || '')));
     const text = parts.filter(Boolean).join(' ').slice(0, 1950);
     S.tts.speak(text).catch(e => { if (e && e.code === 'not_granted') { S.tts = null; schedule(); } });
@@ -1100,6 +1387,7 @@
     db.collection('checkins').orderBy('date', 'desc').limit(14).onSnapshot(snap => { const m = {}; rows(snap).forEach(x => { const k = validYMD(x.id) ? x.id : x.date; if (validYMD(k)) m[k] = x; }); S.checkins = m; got(snap); }, () => {});
     db.collection('readings').orderBy('at', 'desc').limit(60).onSnapshot(snap => { S.readings = rows(snap).filter(x => !x.deleted); got(snap); }, () => {});
     db.collection('learned').limit(200).onSnapshot(snap => { const m = {}; rows(snap).forEach(x => { m[x.id] = x; }); S.learned = m; got(snap); }, () => {});
+    db.collection('habits').limit(200).onSnapshot(snap => { const m = {}; rows(snap).forEach(x => { m[x.id] = x; }); S.habits = m; S.gotHabits = true; got(snap); }, () => {});
     S.weekId = mondayOf(todayYMD());
     db.doc('weeks/' + S.weekId).onSnapshot(s => { S.week = s.exists ? s.data() : null; schedule(); }, () => {});
     db.doc('meta/config').onSnapshot(s => { S.config = (s.exists && s.data()) || {}; schedule(); }, () => {});

@@ -28,7 +28,7 @@ CHUNK = 2700
 UA = 'the-landing agent (personal use)'
 YMD = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 B64 = re.compile(r'^[A-Za-z0-9_-]+$')
-COLLECTIONS = ['areas', 'stars', 'loops', 'days', 'feeds', 'inbox', 'asks', 'learned', 'checkins', 'readings', 'weeks', 'meta']
+COLLECTIONS = ['areas', 'stars', 'loops', 'days', 'feeds', 'inbox', 'asks', 'learned', 'checkins', 'readings', 'weeks', 'habits', 'meta']
 NEVER_PUBLISH = {'meta/app', 'meta/sync'}
 DAY = 86400
 HOLD_DAYS = 3        # a tap whose document is missing from the export waits this long before it is given up on
@@ -178,10 +178,30 @@ HAND_STATUS = {'asked', 'seen', 'cancelled'}
 LOOP_NEW = {'title', 'area', 'status', 'why', 'firstStep', 'minutes', 'due', 'kind', 'weight', 'source', 'since', 'offered', 'lastOffered', 'snoozeUntil', 'doneAt', 'updatedAt', 'by'}
 ASK_UPD = {'status', 'answer', 'answeredAt', 'skippedOn', 'showOn', 'updatedAt', 'by'}
 LEARN_UPD = {'ok', 'okOn', 'correction', 'updatedAt', 'by'}
+# The one habit: a tap may answer a day, say what got in the way, say how automatic it feels, change the words,
+# and start, pause, keep or let go of a habit. It may never write the run's note or suggestion, or delete a habit.
+HABIT_STATUS = {'idea', 'building', 'paused', 'kept', 'dropped'}
+HABIT_WORDS = {'title': 120, 'anchor': 160, 'tiny': 200, 'after': 120, 'when': 12}
+HABIT_DATES = {'startedOn', 'pausedOn', 'keptOn', 'droppedOn', 'adjustOn', 'keepAskedOn', 'suggestAnswered'}
+HABIT_MAPS = {'days': {'yes', 'no', ''}, 'miss': {'forgot', 'time', 'energy', 'skip', ''}, 'feel': {'effort', 'easier', 'auto', ''}}
+HABIT_UPD = set(HABIT_WORDS) | HABIT_DATES | set(HABIT_MAPS) | {'status', 'updatedAt', 'by'}
+HABIT_NEW = HABIT_UPD | {'area', 'why', 'order'}
 ID_OK = re.compile(r'^[A-Za-z0-9_.~:@+-]{1,80}$')
 
 scalar = lambda v, n=400: v is None or isinstance(v, (bool, int, float)) or (isinstance(v, str) and len(v) <= n)
 ticks_ok = lambda t: isinstance(t, dict) and len(t) <= 60 and all(isinstance(k, str) and len(k) <= 60 and (v is False or (isinstance(v, str) and len(v) <= 40)) for k, v in t.items())
+
+
+def habit_values(d):
+    """Return None when a habit's fields are well-formed, or which part isn't."""
+    if 'status' in d and d['status'] not in HABIT_STATUS: return 'habit status'
+    for k, n in HABIT_WORDS.items():
+        if k in d and not (isinstance(d[k], str) and len(d[k]) <= n): return 'habit words'
+    for k in HABIT_DATES:
+        if k in d and not (isinstance(d[k], str) and (d[k] == '' or YMD.match(d[k]))): return 'habit dates'
+    for k, allowed in HABIT_MAPS.items():
+        if k in d and not (isinstance(d[k], dict) and len(d[k]) <= 400 and all(isinstance(day, str) and YMD.match(day) and isinstance(v, str) and v in allowed for day, v in d[k].items())): return 'habit ' + k
+    return None if all(scalar(d.get(k)) for k in ('updatedAt', 'by', 'area', 'why', 'order')) else 'habit values'
 
 
 def check_op(o, docs):
@@ -193,7 +213,7 @@ def check_op(o, docs):
     if o['ts'] < (time.time() - MAX_OP_DAYS * DAY) * 1000: return 'too old'
     if w != 'del' and not isinstance(d, dict): return 'no data'
     if w != 'del' and len(json.dumps(d)) > 9000: return 'too big'
-    if w == 'upd' and not exists and col in ('loops', 'asks', 'learned', 'days', 'weeks', 'checkins'): return 'missing'
+    if w == 'upd' and not exists and col in ('loops', 'asks', 'learned', 'days', 'weeks', 'checkins', 'habits'): return 'missing'
     if col == 'loops':
         if w == 'upd':
             if not set(d) <= LOOP_UPD: return 'loop fields'
@@ -241,6 +261,12 @@ def check_op(o, docs):
         if w != 'upd' or not YMD.match(did) or not set(d) <= {'ticks', 'question'}: return 'day'
         q = d.get('question', {})
         return None if ticks_ok(d.get('ticks', {})) and isinstance(q, dict) and set(q) <= {'answered', 'answeredAt'} and all(scalar(v, 100) for v in q.values()) else 'day values'
+    if col == 'habits':
+        if w == 'upd': return habit_values(d) if set(d) <= HABIT_UPD else 'habit fields'
+        if w == 'set':
+            if exists or not set(d) <= HABIT_NEW or d.get('by') != 'page' or d.get('status') not in ('building', 'paused'): return 'new habit'
+            return habit_values(d) if isinstance(d.get('title'), str) and d['title'].strip() else 'new habit values'
+        return 'habits cannot be deleted from the phone'
     if col == 'meta' and did == 'next':
         return None if w == 'set' and set(d) <= {'loopId', 'title', 'forDate', 'pickedAt', 'by'} and all(scalar(v) for v in d.values()) else 'pick'
     return 'that part of the page cannot be changed from the phone'
