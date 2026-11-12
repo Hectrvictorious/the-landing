@@ -14,7 +14,7 @@
     days: [], dayIdx: 0, loops: {}, gotLoops: false, areas: [], areaMap: {}, stars: [], feeds: [], inbox: [], status: null,
     asks: {}, gotAsks: false, checkins: {}, readings: [], learned: {}, week: null, weekId: '', config: {}, next: null,
     view: 'today', openLoops: {}, openAreas: {}, help: {}, dropArm: null,
-    multi: {}, askAll: false, knowAll: false, readAll: false, scriptOpen: false, appInfo: null, unlinkArm: false, linkMiss: false, showLink: false, prefs: {}, handNote: {}, handOpen: {}, handFix: {},
+    multi: {}, askAll: false, knowAll: false, readAll: false, scriptOpen: false, appInfo: null, unlinkArm: false, linkMiss: false, showLink: false, prefs: {}, handNote: {}, handOpen: {}, handFix: {}, handTell: {}, itemTell: '',
     habits: {}, gotHabits: false, hEdit: null, hArm: null, hWhy: false,
     tts: null, speaking: false, dict: null, listening: false, sample: null
   };
@@ -190,12 +190,19 @@
       return '<a href="' + esc(url) + '" target="_blank" rel="noopener">' + esc(url) + '</a>' + esc(tail);
     }).join('');
   }
+  /* "Edit and send to Claude": his own words about a task (what should change, or what he meant). They travel as a
+     hand-off with `changes`, so the same pass that does handed-over work also rewrites the task and says what it changed. */
+  const TELL_PH = 'What should change, or what did you mean?';
+  const TELL_SENT = 'Sent to Claude. It comes back with the next edition.';
+  const canTellLoop = L => !!L && (L.status === 'open' || L.status === 'unsure' || L.status === 'waiting');
+  const focusField = fid => requestAnimationFrame(() => requestAnimationFrame(() => { const el = $(fid); if (el && el.offsetParent !== null) { try { el.focus(); } catch (e) { /* focus is a nicety */ } } }));
   function handBlock(L, live) {
     const h = hand(L); const id = esc(L.id); const st = h ? String(h.status || '') : '';
-    const field = (ph, act, label) => '<div class="linkbox"><input class="hand-in" type="text" maxlength="600" placeholder="' + ph + '" aria-label="' + ph + '"><button class="btn small primary" type="button" data-act="' + act + '" data-id="' + id + '">' + label + '</button></div>';
+    const field = (ph, act, label) => '<div class="linkbox"><input class="hand-in" id="hf-' + esc(S.view) + '-' + id + '" type="text" maxlength="600" placeholder="' + ph + '" aria-label="' + ph + '"><button class="btn small primary" type="button" data-act="' + act + '" data-id="' + id + '">' + label + '</button></div>';
     if (st === 'asked') {
-      return '<div class="hand"><p class="hand-h">Handed to Claude</p><p class="meta">' + (h.changes ? 'Sent back with your changes. ' : '') + 'It comes back with the next edition: about 1:15 in the afternoon, or before 9 in the morning.</p>' +
-        (h.changes ? '<p class="meta">What you asked to change: ' + esc(h.changes) + '</p>' : '') + (h.note ? '<p class="meta">Your note: ' + esc(h.note) + '</p>' : '') +
+      const again = !!(h.result && typeof h.result === 'object');   // it came back once already, and these are his changes to it
+      return '<div class="hand"><p class="hand-h">' + (h.changes && !again ? 'Sent to Claude' : 'Handed to Claude') + '</p><p class="meta">' + (h.changes && again ? 'Sent back with your changes. ' : '') + 'It comes back with the next edition: about 1:15 in the afternoon, or before 9 in the morning.</p>' +
+        (h.changes ? '<p class="meta">' + (again ? 'What you asked to change: ' : 'What you said: ') + esc(h.changes) + '</p>' : '') + (h.note ? '<p class="meta">Your note: ' + esc(h.note) + '</p>' : '') +
         (live ? (S.handNote[L.id] ? field('Anything Claude should know?', 'handnote', 'Save') :
           '<div class="row"><button class="link" type="button" data-act="handnoteopen" data-id="' + id + '">' + (h.note ? 'Change the note' : 'Add a note for Claude') + '</button><button class="link" type="button" data-act="handback" data-id="' + id + '">Take it back</button></div>') : '') + '</div>';
     }
@@ -209,9 +216,13 @@
           '<div class="row">' + (st !== 'seen' && L.status !== 'done' ? '<button class="btn small primary" type="button" data-act="handseen" data-id="' + id + '">' + (r.finishes ? 'Looks good. That\'s done.' : 'Looks good') + '</button>' : '') +
           '<button class="btn small" type="button" data-act="handfixopen" data-id="' + id + '">' + (st === 'cant' ? 'Answer Claude' : 'Change something') + '</button></div>') : '') + '</div>';
     }
-    if (!live || (L.status !== 'open' && L.status !== 'unsure')) return '';
-    return '<div class="hand offer">' + (L.offer ? '<p class="meta">Claude can take this: ' + esc(L.offer) + '</p>' : '') +
-      '<div class="row"><button class="btn small" type="button" data-act="handoff" data-id="' + id + '">Hand it to Claude</button></div></div>';
+    const canHand = L.status === 'open' || L.status === 'unsure';
+    if (!live || !canTellLoop(L)) return '';
+    if (S.handTell[L.id]) return '<div class="hand offer">' + field(TELL_PH, 'handtell', 'Send to Claude') +
+      '<div class="row"><button class="link" type="button" data-act="handtellopen" data-id="' + id + '">Never mind</button></div></div>';
+    return '<div class="hand offer">' + (L.offer && canHand ? '<p class="meta">Claude can take this: ' + esc(L.offer) + '</p>' : '') +
+      '<div class="row">' + (canHand ? '<button class="btn small" type="button" data-act="handoff" data-id="' + id + '">Hand it to Claude</button>' : '') +
+      '<button class="btn small" type="button" data-act="handtellopen" data-id="' + id + '">Edit and send to Claude</button></div></div>';
   }
   /* What has come back and not been looked at yet, gathered at the top of Today. */
   function backBlock(live, skipId) {
@@ -546,6 +557,18 @@
       (metaBits.length ? '<p class="meta">' + metaBits.join(' · ') + '</p>' : '') + '</section>';
   }
 
+  /* His words about one line of today's list. A line tied to a task goes through that task; any other line goes in as
+     a note that names the edition and the line, so the next pass knows exactly which one he meant. */
+  const tellPrefix = it => 'About "' + String(it.title || '').slice(0, 120) + '" on today\'s list: ';
+  const tellRef = (d, it) => 'today/' + d.date + '/' + it.id;
+  function todaySent(d, it, LT) {
+    if (LT) { const h = hand(LT); return h && h.status === 'asked' && h.changes ? { text: String(h.changes), id: LT.id, act: 'handback' } : null; }
+    const ref = tellRef(d, it); const n = S.inbox.filter(x => x.kind === 'capture' && x.ref === ref).sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
+    if (!n) return null;
+    const pre = tellPrefix(it); const text = String(n.text || '');
+    return { text: text.indexOf(pre) === 0 ? text.slice(pre.length) : text, id: n.id, act: 'uncap' };
+  }
+  const feedLines = v => (Array.isArray(v) ? v : typeof v === 'string' ? v.split(/\n+/) : []).map(x => String(x == null ? '' : x).trim()).filter(Boolean);
   function renderToday() {
     const d = day(); const top = $('todayTop');
     const note = stateNotice();
@@ -577,9 +600,17 @@
         const L = it.loopId && S.loops[it.loopId];
         const on = L ? L.status === 'done' : !!ticks[it.id];
         const tickable = it.kind !== 'event' && it.kind !== 'holiday';
+        const LT = canTellLoop(L) ? L : null;                       // a line tied to a task speaks through that task
+        const sent = live && !on ? todaySent(d, it, LT) : null;
+        const canEdit = live && !on && !sent && !(LT && handBack(LT));
+        const editing = canEdit && S.itemTell === it.id;
         return '<li class="trow' + (on ? ' on' : '') + '">' +
           (tickable ? '<button class="tick" type="button" data-act="tick" data-id="' + esc(it.id) + '" aria-pressed="' + (on ? 'true' : 'false') + '" aria-label="' + esc((on ? 'Done: ' : 'Mark done: ') + it.title) + '"></button>' : '<span class="tslot"><i></i></span>') +
-          '<div class="tmain">' + (it.time ? '<div class="ttime">' + esc(it.time) + '</div>' : '') + '<div class="ttitle">' + esc(it.title) + '</div>' + (it.note ? '<div class="tnote">' + esc(it.note) + '</div>' : '') + '</div>' + dot(it.area) + '</li>';
+          '<div class="tmain">' + (it.time ? '<div class="ttime">' + esc(it.time) + '</div>' : '') + '<div class="ttitle">' + esc(it.title) + '</div>' + (it.note ? '<div class="tnote">' + esc(it.note) + '</div>' : '') +
+          (sent ? '<div class="tsent">Sent to Claude: ' + esc(sent.text) + ' <button class="link" type="button" data-act="' + sent.act + '" data-id="' + esc(sent.id) + '">Take it back</button></div>' : '') +
+          (editing ? '<div class="linkbox"><input class="hand-in" id="tf-' + esc(it.id) + '" type="text" maxlength="600" placeholder="' + TELL_PH + '" aria-label="' + TELL_PH + '"><button class="btn small primary" type="button" data-act="tellitem" data-id="' + esc(it.id) + '">Send to Claude</button></div>' : '') + '</div>' +
+          (canEdit ? '<button class="tedit" type="button" data-act="telltoday" data-id="' + esc(it.id) + '" aria-expanded="' + editing + '" aria-label="' + esc('Edit and send to Claude: ' + it.title) + '">' + (editing ? 'Close' : 'Edit') + '</button>' : '') +
+          dot(it.area) + '</li>';
       }).join('') + '</ul></section>';
     }
 
@@ -602,7 +633,7 @@
     const feeds = S.feeds.filter(f => f.sentence && (!validYMD(f.date) || f.date >= cutoff)).sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
     paint($('todayFeeds'), feeds.length ? '<section class="sec" aria-labelledby="fH"><h2 class="h" id="fH">From your agents</h2><div>' + feeds.map(f =>
       '<div class="feed"><div class="fname">' + esc(f.name || f.agent || 'Agent') + '<span>' + esc(ago(f.at)) + '</span></div><p>' + esc(f.sentence) + '</p>' +
-      (Array.isArray(f.detail) && f.detail.length ? '<ul>' + f.detail.slice(0, 6).map(x => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '') +
+      (feedLines(f.detail).length ? '<ul>' + feedLines(f.detail).slice(0, 6).map(x => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '') +
       (f.where ? '<p class="fwhere">' + esc(f.where) + '</p>' : '') + '</div>').join('') + '</div></section>' : '');
 
     /* coming up */
@@ -646,8 +677,10 @@
     if (st.length && L.status !== 'done') bits.push(st.filter(x => L.stepTicks && L.stepTicks[x.id]).length + ' of ' + st.length + ' steps');
     const hs = hand(L) ? String(hand(L).status || '') : '';
     if (hs === 'asked') bits.push('with Claude'); else if (handBack(L)) bits.push('<b>back from Claude</b>'); else if (L.offer && L.status === 'open') bits.push('Claude can take this');
+    const tell = !!S.db && canTellLoop(L) && hs !== 'asked' && !handBack(L);
     return '<div class="loop' + (L.status === 'done' ? ' done' : '') + '"><div class="loop-top">' + dot(L.area) +
-      '<button class="loop-title" type="button" data-act="toggle" data-id="' + esc(L.id) + '" aria-expanded="' + open + '">' + esc(L.title) + '</button></div>' +
+      '<button class="loop-title" type="button" data-act="toggle" data-id="' + esc(L.id) + '" aria-expanded="' + open + '">' + esc(L.title) + '</button>' +
+      (tell ? '<button class="loop-edit" type="button" data-act="tellrow" data-id="' + esc(L.id) + '" aria-label="' + esc('Edit and send to Claude: ' + L.title) + '">Edit</button>' : '') + '</div>' +
       '<div class="loop-body"><p class="loop-meta">' + bits.join(' · ') + '</p>' +
       (open || L.status === 'unsure' ? (L.why ? '<p class="why">' + esc(L.why) + '</p>' : '') + (L.firstStep && L.status !== 'done' ? '<p class="fs"><b>First step</b>' + esc(L.firstStep) + '</p>' : '') : '') +
       (open && L.status !== 'done' ? stepsBlock(L, true) : '') +
@@ -762,9 +795,10 @@
     }).join('') + '</div>' +
       appBlock() +
       '<section class="sec how"><h2 class="h">How this page works</h2><div>' +
-      '<p>Each morning a new edition is written from your notes, your calendar, your recordings, your money and piano pages, and your agents\' headlines. It starts a little after 8 and is ready before 9. It picks one thing you\'ve been putting off and makes the first step small. A second, shorter pass runs after lunch, about 1:15. In between, the top of Today follows the clock.</p>' +
-      '<p>Every tap here is saved right away and read at the next pass: I did it, Not today, Let it go, the steps and lists you tick, and anything you type or say under Tell The Landing. Nothing here sends email or contacts anyone.</p>' +
+      '<p>Each morning a new edition is written from your notes, your calendar, your personal mail, your recordings, your money and piano pages, and your agents\' headlines. It starts a little after 8 and is ready before 9. It picks one thing you\'ve been putting off and makes the first step small. A second, shorter pass runs after lunch, about 1:15. In between, the top of Today follows the clock.</p>' +
+      '<p>Every tap here is saved right away and read at the next pass: I did it, Not today, Let it go, the steps and lists you tick, and anything you type or say under Tell The Landing. Nothing here sends email or contacts anyone. Your mail is only read: who wrote, and about what. Nothing in it is opened, moved, answered or deleted.</p>' +
       '<p>Hand it to Claude does what it says. The next pass does the part Claude can do alone (research, a draft, a comparison, a call sheet) and brings it back here for you to read. Drafts only: nothing gets sent, bought or signed.</p>' +
+      '<p>Edit and send to Claude is on every task, and Edit is on each line of today\'s list. Type what should change, or what you meant. The next pass rewrites the task to match and tells you what it changed.</p>' +
       '<p>One habit at a time lives under Check in, with its one question near the top of Today. You choose it and tie it to something already in your day; the page asks once a day whether it happened; a day with no answer is only a blank. When it runs by itself you call it built, it joins your daily rhythm, and the next one starts.</p>' +
       '<p>Check in is where the page learns you: a few one-tap questions at a time, each saying why it asks. Your answers change what the next editions pick, when they suggest it and how they word it. What the page has taken from you is listed there too, and you can correct any line.</p>' +
       '<p>Only you can open this page.</p></div></section>');
@@ -1063,7 +1097,27 @@
       const fin = !!(h.result && h.result.finishes) && L.status !== 'done';
       if (patchHand(id, { status: 'seen', seenAt: now }, fin ? { status: 'done', doneAt: now, doneVia: 'handoff' } : null)) toast(fin ? landedMsg() : 'Good. It stays with the loop if you want it again.');
     },
-    handfixopen(id) { S.handFix[id] = true; schedule(); },
+    handfixopen(id) { S.handFix[id] = true; schedule(); focusField('hf-' + S.view + '-' + id); },
+    handtellopen(id) { S.handTell[id] = !S.handTell[id]; schedule(); if (S.handTell[id]) focusField('hf-' + S.view + '-' + id); },
+    handtell(id, btn) {
+      const v = fieldText(btn); if (!v) { toast('Say what should change first.'); return; }
+      if (patchHand(id, { status: 'asked', askedAt: new Date().toISOString(), changes: v })) { delete S.handTell[id]; toast(TELL_SENT); }
+    },
+    /* The Edit link on a task's row: open the row with the box ready. A task with work already back gets its "Change something" box. */
+    tellrow(id) {
+      const L = S.loops[id]; const h = hand(L); if (!L) return;
+      S.openLoops[id] = true;
+      if (h && h.result && typeof h.result === 'object' && (h.status === 'ready' || h.status === 'cant' || h.status === 'seen')) S.handFix[id] = true; else S.handTell[id] = true;
+      schedule(); focusField('hf-' + S.view + '-' + id);
+    },
+    telltoday(id) { S.itemTell = S.itemTell === id ? '' : id; schedule(); if (S.itemTell) focusField('tf-' + id); },
+    tellitem(id, btn) {
+      const v = fieldText(btn); if (!v) { toast('Say what should change first.'); return; }
+      const d = latest(); const it = d && Array.isArray(d.today) ? d.today.filter(x => x.id === id)[0] : null; if (!it || S.dayIdx !== 0) return;
+      const L = it.loopId && S.loops[it.loopId];
+      if (canTellLoop(L)) { if (patchHand(L.id, { status: 'asked', askedAt: new Date().toISOString(), changes: v })) { S.itemTell = ''; toast(TELL_SENT); } return; }
+      addInbox({ kind: 'capture', text: tellPrefix(it) + v, ref: tellRef(d, it) }).then(() => { S.itemTell = ''; schedule(); toast(TELL_SENT); }).catch(saveFail);
+    },
     handfix(id, btn) {
       const v = fieldText(btn); if (!v) { toast('Say what should change first.'); return; }
       if (patchHand(id, { status: 'asked', askedAt: new Date().toISOString(), changes: v })) { delete S.handFix[id]; toast('Sent back to Claude.'); }
